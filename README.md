@@ -70,8 +70,8 @@
 3. **保留所有核心 FinOps 资产**：
    - 异步写入 MySQL 审计表，继承每日中行实时汇率对账（USD ➔ CNY）；
    - 原始报文自动折叠 Base64 图片，Gzip 极速压缩后异步送往 VictoriaLogs 全文检索。
-4. **看板生态零修改复活**：
-   - 现有的 React 18 + Vite + Tailwind 审计大屏直接对接，继续享受抽屉式报文穿透。
+4. **Dashboard 大屏工程完整内嵌迁移**：
+   - 将现有 React 18 + Vite + Tailwind CSS 前端大屏与只读查询/透视 API 代码**完整迁移至本项目内建交付**，自闭环构建，继续享受抽屉式报文穿透。
 
 ---
 
@@ -89,7 +89,8 @@ my-higress-svc/
 ├── deploy/                     # 部署与配置模版
 │   ├── docker-compose.yaml     # 本地单机快速试驾与压测环境
 │   └── k8s/                    # 云原生生产集群交付图纸 (Gateway API / CRD)
-└── frontend/                   # 移植继承的 React 18 可观测大屏静态服务
+├── frontend/                   # 完整迁移的 React 18 + Vite + Tailwind 前端大屏源码
+└── services/dashboard-api/     # 完整迁移的看板查询与报文透视 API 模块
 ```
 
 ---

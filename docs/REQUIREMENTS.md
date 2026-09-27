@@ -95,9 +95,11 @@
 - 异步批量投递至 StarFive 星光板上的 **VictoriaLogs** 实例进行全文检索与永久保存；
 - 在存储前对图片进行正则穿透折叠（防止超大 Base64 污染索引），保留元数据标记。
 
-### F6: 100% 复活与对接现有 React 可观测大屏 (Dashboard)
-- 保持现有 `/api/v1/logs`、`/api/v1/logs/{request_id}/payload`、`/api/v1/metrics/summary` 接口契约完全不变；
-- 现有基于 React 18 + Vite + Tailwind 编写的 SPA 看板无感知运行，继续支持抽屉式报文穿透。
+### F6: Dashboard 可观测大屏代码完美迁移与自闭环构建 (Dashboard Native Migration)
+- **工程资产全量迁移**：将原 `my-litellm-service` 项目中成熟的 Dashboard 资产整体搬迁至本项目（`my-higress-svc`），实现“高性能 AI 网关 + 专属可观测大屏”一体化自闭环交付，彻底脱离对老旧 Python 项目的依赖。
+- **前端工程完美移植**：将完整的 React 18 + Vite + Tailwind CSS 前端代码迁移至 `frontend/` 目录，完整保留实时 Token 流水大屏、模型费用环形图、每日消耗趋势折线图以及**核心的抽屉式报文透视（Payload Drawer）**界面。
+- **查询与透视后端 API 移植**：完整迁移提供看板数据源的后端服务模块，保持 `/api/v1/logs`、`/api/v1/metrics/summary` 以及 `/api/v1/logs/{request_id}/payload` 接口契约 100% 兼容，原生连通 OCI MySQL HeatWave 与 StarFive VictoriaLogs。
+- **多阶段容器自包含构建**：在 Dockerfile 中通过多阶段构建（Stage 1: Node 20 编译 React SPA ➔ Stage 2: 运行时挂载），实现单镜像内置大屏静态资产与查询接口，开箱即用。
 
 ---
 

@@ -72,13 +72,16 @@ gantt
 
 ---
 
-### 🏁 里程碑 3：看板服务复活与端到端功能验证 (Phase 3: Dashboard & API Unification)
-- **目标**：将现有自研的 React 18 看板与后端查询 API 无缝嫁接到新系统上，实现无感知平替。
+### 🏁 里程碑 3：看板代码完整迁移与端到端闭环验证 (Phase 3: Dashboard Code Migration & Unification)
+- **目标**：将原项目的 React 18 前端工程与后端数据查询/透视 API 代码**完整迁移至当前仓库**，实现完全独立的自包含看板交付。
 - **具体交付项**：
-  1. 将现有的轻量级查询服务（FastAPI 只读 API + React 前端静态包）作为独立 Pod 挂载；
-  2. 验证前端点击调用列表时，能够通过 MySQL 字段正确定位并拉取 VictoriaLogs 的归档报文；
-  3. 验证多模型 Fallback（如 Gemini 3.8 失败时无缝切换到 Gemini 3.7 或备用渠道）。
+  1. `frontend/`：将原项目的 Vite + React 18 + Tailwind CSS 源码完整迁入，保留所有图表、Token 统计与抽屉交互组件；
+  2. `app/` 或 `services/dashboard-api/`：将提供 `/api/v1/logs`、`/api/v1/metrics/summary` 及 `/api/v1/logs/{request_id}/payload` 的查询模块与 SQLAlchemy/VictoriaLogs 交互逻辑完整迁入；
+  3. `Dockerfile` 多阶段构建集成：前端在 Stage 1 编译生成静态包，Stage 2 统一装配；
+  4. 验证前端点击调用列表时，能够通过 MySQL 字段正确定位并拉取 VictoriaLogs 的归档报文；
+  5. 验证多模型 Fallback（如 Gemini 3.8 失败时无缝切换到 Gemini 3.7 或备用渠道）。
 - **验收标准**：
+  - [ ] 看板代码在 `my-higress-svc` 内部直接自闭环编译打包，无需依赖原 `my-litellm-service` 代码库；
   - [ ] 主人能在浏览器中顺畅打开可观测大屏，实时刷新出通过 Higress 产生的调用流水；
   - [ ] 抽屉式报文透视（Payload Drawer）能秒级解压并高亮展示 Prompt 和 Response。
 
