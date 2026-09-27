@@ -1,0 +1,28 @@
+# Binaries and build artifacts
+*.wasm
+*.tar.gz
+*.exe
+bin/
+dist/
+build/
+
+# Go / TinyGo
+vendor/
+go.work
+
+# IDE & OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Logs & temporary files
+*.log
+tmp/
+.cache/
+
+# Environment files with secrets
+.env
+*.local.yaml
+sa-key.json
