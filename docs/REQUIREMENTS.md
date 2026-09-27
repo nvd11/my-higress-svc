@@ -115,7 +115,30 @@
 
 ---
 
-## 5. 安全与运维红线
+## 5. 部署目标宿主机与硬件规格 (Deployment Target: oci-free-arm-vm)
+
+本系统生产环境将与原 `litellm-svc` 保持一致，**严格部署于主人的甲骨文云新加坡机房核心节点 `free-arm-vm`**：
+
+1. **宿主机物理规格**：
+   - **主机名/标识**：`free-arm-vm`（OCI Always Free 永久免费资源池）
+   - **公网 IP**：`134.185.90.98` · **Tailscale 专网 IP**：`100.105.130.0`
+   - **硬件资源**：Ampere Altra ARM64 架构 · **4 OCPU (4核) / 24 GB 物理内存**
+   - **底层操作系统**：Ubuntu 24.04 LTS (Kernel 6.8+ aarch64)
+2. **集群调度拓扑**：
+   - 隶属于主人业务 K3s 集群 B（`tencent-dp1-cluster`）；
+   - Kubernetes 资源配置必须包含专属调度约束：
+     ```yaml
+     nodeSelector:
+       kubernetes.io/hostname: free-arm-vm
+     ```
+   - 充分利用 `free-arm-vm` 与 OCI 弹性应用负载均衡器（`litellm-alb` / `161.118.240.179:80`）处于同一局域网（VCN Subnet `10.0.0.0/16`）的亚毫秒级网络内网转发优势。
+3. **架构编译与镜像构建要求**：
+   - CI 流水线必须原生构建 **`linux/arm64` (aarch64)** 架构镜像；
+   - Wasm 插件需使用 TinyGo 针对 `wasm32-wasi` 目标进行优化编译，并在 ARM64 Envoy 运行时中加载测试。
+
+---
+
+## 6. 安全与运维红线
 
 1. **凭证隔离与安全红线**：
    - 绝不硬编码任何真实的 API Key、数据库密码或服务账号凭据；

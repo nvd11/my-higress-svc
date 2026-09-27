@@ -87,14 +87,18 @@ gantt
 
 ---
 
-### 🏁 里程碑 4：K3s 集群上云与 ArgoCD GitOps 交付 (Phase 4: Production GitOps)
-- **目标**：将完整系统打包装入主人的基础设施仓库 `my-argocd-manifests`，通过 GitOps 实现生产环境自动化部署。
+### 🏁 里程碑 4：K3s 集群上云与 ArgoCD GitOps 交付 (Phase 4: Production GitOps on oci-free-arm-vm)
+- **目标**：将完整系统打包装入主人的基础设施仓库 `my-argocd-manifests`，**严格部署于主人的甲骨文云新加坡机房 4C24G ARM 旗舰节点 `free-arm-vm`**，通过 GitOps 实现生产环境自动化部署。
 - **具体交付项**：
-  1. `Dockerfile` 与多架构镜像构建 CI Workflow（支持 ARM64 与 AMD64）；
-  2. Kubernetes 资源清单元数据：`Deployment`、`Service`、`WasmPlugin` 以及 `Gateway API` 规则；
+  1. `Dockerfile` 与 GitHub Actions CI 流水线：原生交叉编译产出 **`linux/arm64`** 多架构镜像；
+  2. Kubernetes 生产资源清单元数据：
+     - `Deployment`：硬性绑定节点调度 `nodeSelector: kubernetes.io/hostname: free-arm-vm`，锁定在 24GB 大内存机器上；
+     - `Service` & `WasmPlugin`：加载编译完成的 Wasm 插件并暴露服务；
+     - `Gateway API` / `HTTPRoute`：与现有 OCI ALB（`161.118.240.179:80`）实现同内网极速对接入站；
   3. ArgoCD Application 注册声明：`argocd-apps/higress-app.yaml`；
   4. 流量灰度切换手册（逐步把 OpenCode、Yui、Rin 的 `baseURL` 切换至新入口）。
 - **验收标准**：
+  - [ ] 容器成功调度并常驻运行于 `free-arm-vm` 节点，ARM64 原生架构无任何兼容性损耗；
   - [ ] ArgoCD 显示 `Synced / Healthy`，生产集群稳定常驻运行；
   - [ ] 线上全面替代完成，老旧 LiteLLM 容器安全退役。
 
