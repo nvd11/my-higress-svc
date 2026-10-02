@@ -23,10 +23,10 @@
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────┐
-│ 第一阶段：编写 LLM 路由配置文件 (deploy/k8s/routes/)                  │
+│ 第一阶段：编写 LLM 模型转译配置 (deploy/k8s/routes/)                  │
 │ • ai-proxy.yaml: 8大模型映射、Google Gemini 原生直连、Fallback 保底矩阵 │
 │ • hermes-passthrough.yaml: /hermes/* 本地无损直通路由                  │
-│ • http-route.yaml: 暴露 /v1/chat/completions 与 /v1/models             │
+│ （注意：对外入站 HTTPRoute 统筹于 my-argocd-manifests 声明，与 Gateway 解耦）│
 └──────────────────────────────────┬─────────────────────────────────────┘
                                    │
                                    ▼
@@ -174,33 +174,10 @@ spec:
   externalName: 100.115.214.26
 ```
 
-### 2.3 文件路径：`deploy/k8s/routes/http-route.yaml`
-正式对外声明暴露的 OpenAI 规范接口。
-
-```yaml
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: higress-openai-api-route
-  namespace: higress-system
-spec:
-  parentRefs:
-    - name: higress-gateway
-  rules:
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /v1/chat/completions
-        - path:
-            type: Exact
-            value: /v1/models
-        - path:
-            type: PathPrefix
-            value: /health
-      backendRefs:
-        - name: higress-gateway
-          port: 8080
-```
+### 2.3 架构边界解耦说明：对外入站 HTTPRoute 的归属
+根据 GitOps 严格的权责分离规范，**对外入站路由（HTTPRoute）严禁放在业务应用代码仓库中**：
+- **原因**：集群的入口网关（如 `parentGateway: kong-main-gateway` 或全局 ALB 入口）属于集群级基础设施资源，并不归单个服务所有；
+- **规范**：与现存 `litellm-svc` 保持 100% 风格一致，所有对外暴露路径（`/v1/chat/completions`、`/v1/models`、`/health`）统一定义在基础设施仓库 **`my-argocd-manifests/argocd-apps/higress-svc-app.yaml`** 中（详见 [第四阶段](#5-第四阶段编写神经中枢--argocd-生产交付清单元数据)）。
 
 ---
 
