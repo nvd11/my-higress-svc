@@ -49,8 +49,8 @@ gantt
 ### 🏁 里程碑 1：K3s 云原生沙盒搭建与极限性能验证 (Phase 1: K3s Cloud-Native Sandbox on oci-free-arm-vm)
 - **目标**：彻底摒弃本地 docker-compose 中间层，与现有 `litellm-svc` 保持完全一致的交付标准，采用**方案 A（基于官方 Helm Chart 的 ArgoCD 一键全托管）**，直接在 OCI ARM 旗舰节点 `free-arm-vm` 上注册部署 Higress K3s 独立沙盒，由 ArgoCD 自动管理 CRD 与 Controller，直连现有内网与上游，验证超长上下文处理能力。
 - **具体交付项**：
-  1. `deploy/k8s/values.yaml`：定制化 Helm Values 配置（ARM64 调度、资源配额与日志等级）；
-  2. `deploy/k8s/argocd-app.yaml`：在主人的 `my-argocd-manifests` 注册沙盒 App；
+  1. `values.yaml`：根目录维护定制化 Helm Values 配置（ARM64 调度与内存调优）；
+  2. `secrets.yaml`：根目录维护 OCI Vault ExternalSecret 声明；
   3. `ai-proxy.yaml` / `hermes-passthrough.yaml`：根目录维护模型转译与官方内置 `ai-proxy` CRD 配置；
   4. `benchmark/test_long_context.py`：针对 100k、350k、700k 上下文进行基准测试；
 - **验收标准**：
@@ -127,9 +127,8 @@ my-higress-svc/
 │       ├── mysql_sink.go       # 异步 MySQL 入库逻辑
 │       ├── vlogs_sink.go       # 异步 VictoriaLogs 报文推送与压缩
 │       └── go.mod              # Go 依赖描述文件
-├── deploy/
-│   └── k8s/                    # 云原生生产交付图纸 (方案 A: Helm + ArgoCD)
-│       ├── values.yaml         # 定制化 Helm Values (ARM64 调度与网关参数)
-│       └── wasm-plugin.yaml    # WasmPlugin CRD 挂载描述
+├── values.yaml                 # 定制化 Helm Values (ARM64 调度与网关参数)
+├── secrets.yaml                # OCI Vault 自动化 ExternalSecret 凭证声明
+├── wasm-plugin.yaml            # 自研 WasmPlugin CRD 挂载描述 (Phase 2 产物)
 └── frontend/                   # 移植保留的 React 18 可观测大屏工程
 ```

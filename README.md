@@ -86,6 +86,8 @@ my-higress-svc/
 ├── .gitignore                  # Git 忽略规则
 ├── ai-proxy.yaml               # 核心大模型映射、Google 直连与 Fallback 规则 (WasmPlugin)
 ├── hermes-passthrough.yaml     # 本地自主 Agent (Yui/Rin) 裸流无损直通路由
+├── values.yaml                 # 定制化 Helm Values (ARM64 调度与 Envoy 800Mi 调优)
+├── secrets.yaml                # OCI Vault 自动化 ExternalSecret 凭证声明
 ├── docs/
 │   ├── REQUIREMENTS.md         # 详细需求规格说明书 (痛点与功能矩阵)
 │   ├── DELIVERY_GOALS.md       # 四阶段交付目标与里程碑计划
@@ -94,8 +96,6 @@ my-higress-svc/
 │   └── DEPLOYMENT_GUIDE.md     # 生产环境全链路部署与实施实操指南
 ├── plugins/                    # 自研 Wasm-Go 扩展插件源码
 │   └── finops-audit/           # 财务审计与 VictoriaLogs 异步投递插件
-├── deploy/                     # 云原生生产交付图纸 (K8s / ArgoCD)
-│   └── k8s/                    # Helm values 与集群编排清单
 ├── frontend/                   # 完整迁移的 React 18 + Vite + Tailwind 前端大屏源码
 └── services/dashboard-api/     # 完整迁移的看板查询与报文透视 API 模块
 ```

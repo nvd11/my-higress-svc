@@ -31,7 +31,7 @@
                                    │
                                    ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│ 第二阶段：编写网关基础运行时 Values (deploy/k8s/values.yaml)           │
+│ 第二阶段：编写网关基础运行时 Values (根目录 values.yaml)               │
 │ • 锁定 nodeSelector: free-arm-vm (4C24G ARM64)                         │
 │ • Envoy 内存配额 800MiB、streamIdleTimeout=600s、maxRequestBodySize=10MB│
 │ • 分配专属 NodePort 31880 (与 Kong svclb 严格隔离)                    │
@@ -39,7 +39,7 @@
                                    │
                                    ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│ 第三阶段：声明 OCI Vault ExternalSecret 凭证 (deploy/k8s/secrets.yaml) │
+│ 第三阶段：声明 OCI Vault ExternalSecret 凭证 (根目录 secrets.yaml)     │
 │ • 对齐现存 litellm-svc 体系，复用 oci-litellm-vault-store SecretStore   │
 │ • 自动从甲骨文云 Vault 同步密钥进 etcd，代码库 0 敏感信息暴露          │
 └──────────────────────────────────┬─────────────────────────────────────┘
@@ -183,7 +183,7 @@ spec:
 
 ## 3. 第二阶段：编写网关骨架 —— 定制化 Helm Values (ARM64 生产参数)
 
-### 文件路径：`deploy/k8s/values.yaml`
+### 文件路径：`values.yaml` (位于项目根目录)
 此配置用于注入官方 Chart，约束所有 Pod 严格调度至甲骨文云新加坡节点 **`free-arm-vm` (4C24G ARM64)**，并调优高并发长上下文参数。
 
 ```yaml
@@ -246,7 +246,7 @@ higress-gateway:
 
 完全对齐主人的既有资产（如 `my-argocd-manifests/argocd-apps/litellm-svc-app.yaml`），复用已经稳定运行在集群中的 **`oci-litellm-vault-store`**，由 Kubernetes External Secrets Operator 自动拉取甲骨文云保险箱的 Key，**杜绝任何人工敲命令复制粘贴密码的低级失误**！
 
-### 文件路径：`deploy/k8s/secrets.yaml`
+### 文件路径：`secrets.yaml` (位于项目根目录)
 
 ```yaml
 apiVersion: external-secrets.io/v1beta1
@@ -304,7 +304,7 @@ spec:
       targetRevision: 2.0.7
       helm:
         valueFiles:
-          - $values/deploy/k8s/values.yaml
+          - $values/values.yaml
     # 2. 挂载当前代码仓库根目录的模型配置与 ExternalSecret 清单
     - repoURL: https://github.com/nvd11/my-higress-svc.git
       targetRevision: main
@@ -336,7 +336,7 @@ spec:
 
 ### 步骤 6.1：在当前仓库提交模型路由与 Values
 ```bash
-git add deploy/k8s/
+git add ai-proxy.yaml hermes-passthrough.yaml values.yaml secrets.yaml
 git commit -m "feat(config): add LLM model routes, ARM64 values, and ExternalSecret manifests"
 git push origin main
 ```
