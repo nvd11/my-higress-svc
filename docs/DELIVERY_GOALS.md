@@ -127,7 +127,7 @@ my-higress-svc/
 │   └── k8s/                    # 云原生生产交付图纸 (方案 A: Helm + ArgoCD)
 │       ├── values.yaml         # 定制化 Helm Values (ARM64 调度与网关参数)
 │       ├── argocd-app.yaml     # ArgoCD Application 注册清单
-│       ├── routes/             # 模型路由与 HTTPRoute
+│       ├── routes/             # 模型转译与直通插件清单 (ai-proxy, hermes)
 │       └── wasm-plugin.yaml    # WasmPlugin CRD 挂载描述
 └── frontend/                   # 移植保留的 React 18 可观测大屏工程
 ```
