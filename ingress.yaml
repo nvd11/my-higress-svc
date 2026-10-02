@@ -1,10 +1,19 @@
+# ==============================================================================
+# Higress Ingress 业务入口绑定配置
+# ==============================================================================
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: higress-ai-ingress
   namespace: higress-system
+  labels:
+    app.kubernetes.io/name: higress-ai-gateway
+    app.kubernetes.io/part-of: my-higress-svc
   annotations:
-    higress.io/destination: "127.0.0.1:80"
+    higress.io/backend-protocol: HTTPS
+    higress.io/destination: gemini.dns
+    higress.io/proxy-ssl-name: generativelanguage.googleapis.com
+    higress.io/proxy-ssl-server-name: "on"
 spec:
   ingressClassName: higress
   rules:
