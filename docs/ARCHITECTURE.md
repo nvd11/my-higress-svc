@@ -69,6 +69,7 @@
 | **Wasm 编译工具链** | **标准 Go 1.24+ 配合 `GOOS=wasip1 GOARCH=wasm`** | 放弃 TinyGo，消除其 GC、反射受限及序列化第三方库报错的隐患；使用官方成熟的 Higress wasm-go SDK 构建跨平台标准字节码。 |
 | **缓存层策略** | **暂时移除 Redis 响应缓存** | Agent 场景下的巨型 Prompt 几乎无命中率，且历史发生过 2.0GB 报文快照反噬 OOM 的惨痛教训。网关专注于“极致吞吐与轻量”，去除多余状态依赖。 |
 | **多模型收敛** | **全系淘汰 3.7，主力与保底全部收敛为 Gemini 3.8** | 简化 Fallback 链路为一级快速降级：`gemini-3.8-flash (原生)` ➔ `gemini-3.8-backup (A6 API)`。 |
+| **K8s 交付与 CRD 纳管** | **方案 A：基于官方 Helm Chart 的 ArgoCD 一键全托管** | 彻底摒弃手动维护 CRD 定义的繁重负担。由 ArgoCD 声明式拉取官方 Higress Helm 仓库，自动装配 Controller、数据面 Pod 与扩展 CRD (`WasmPlugin`, `McpBridge`)，业务仓库仅维护差异化 `values.yaml` 与路由清单。 |
 
 ---
 
@@ -123,7 +124,13 @@ sequenceDiagram
 
 ---
 
-## 5. 生产环境部署拓扑 (Production Deployment on free-arm-vm)
+## 5. 生产环境部署拓扑与 GitOps 交付 (Production Deployment & GitOps)
+
+### 5.1 方案 A：基于官方 Helm Chart 的 ArgoCD 自动化纳管架构
+网关采用 **方案 A（官方 Helm Chart 声明式交付）**。CRD 无需团队自行维护与编译，全部交由 ArgoCD 生命周期管理：
+1. **控制面与 CRD 自动装配**：ArgoCD 订阅官方 Helm 仓库，部署 `higress-controller` 并自动注册官方 CRD（`WasmPlugin`, `McpBridge`）；
+2. **轻量配置下发**：Controller 通过 Envoy 原生 xDS 动态接口向数据面网关毫秒级热推配置，无需重启 Pod 且连接零中断；
+3. **差异化收敛**：我们仅需在仓库中维护针对 `free-arm-vm` ARM64 的 `values.yaml` 与业务插件 CRD。
 
 ```text
 [甲骨文云新加坡机房 VCN 10.0.0.0/16]
@@ -136,6 +143,7 @@ sequenceDiagram
       │ 4 OCPU ARM64, 24 GB 内存
       │
       └── K3s Pod 编排 (绑定 nodeSelector: kubernetes.io/hostname: free-arm-vm)
+           ├── Pod: higress-controller (监听 CRD 并下发 xDS 配置)
            ├── Pod: higress-gateway (C++ Envoy 内核 + Wasm 运行时)
            └── Pod: my-higress-dashboard (内嵌 React 18 SPA + FastAPI 后端)
 ```
