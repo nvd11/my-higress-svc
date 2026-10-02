@@ -1,0 +1,63 @@
+# ==============================================================================
+# Hermes 自主 Agent 原生直通路由配置 (Hermes Agent Passthrough Route)
+# ==============================================================================
+# 业务背景与架构说明:
+# 1. Yui (8644) 和 Rin (8642) 是部署在主人本地 Radxa Cubie A7A (Moon: 100.115.214.26) 上的自主 Agent;
+# 2. Hermes Agent 使用专属的非标事件流 (如 tool.progress, agent.state), 严禁经由 ai-proxy 转译;
+# 3. 本配置使用标准 Kubernetes Gateway API HTTPRoute 结合 ExternalName Service 实现局域网无损直通.
+# ==============================================================================
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: hermes-agent-passthrough
+  namespace: higress-system
+  labels:
+    app.kubernetes.io/name: higress-ai-gateway
+    app.kubernetes.io/part-of: my-higress-svc
+spec:
+  parentRefs:
+    - name: higress-gateway
+      namespace: higress-system
+  rules:
+    # 🎀 结衣 Yui 原生直通规则 (目标端口: 8644)
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /hermes/yui
+      backendRefs:
+        - name: yui-agent-upstream
+          port: 8644
+          weight: 100
+
+    # ❄️ 凛 Rin 原生直通规则 (目标端口: 8642)
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /hermes/rin
+      backendRefs:
+        - name: rin-agent-upstream
+          port: 8642
+          weight: 100
+
+---
+# ==============================================================================
+# 内部跨节点服务定义 (指向 Radxa Cubie A7A / Moon Tailscale 枢纽 IP)
+# ==============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: yui-agent-upstream
+  namespace: higress-system
+spec:
+  type: ExternalName
+  externalName: 100.115.214.26
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rin-agent-upstream
+  namespace: higress-system
+spec:
+  type: ExternalName
+  externalName: 100.115.214.26
