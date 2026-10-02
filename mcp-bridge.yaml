@@ -1,7 +1,30 @@
+# ==============================================================================
+# Higress McpBridge 服务注册配置 (为外部大模型 API 提供动态 DNS 解析与连接池)
+# ==============================================================================
 apiVersion: networking.higress.io/v1
 kind: McpBridge
 metadata:
   name: default
   namespace: higress-system
+  labels:
+    app.kubernetes.io/name: higress-ai-gateway
+    app.kubernetes.io/part-of: my-higress-svc
 spec:
-  registries: []
+  registries:
+    # 🟢 Google Gemini 官方原生直连通道
+    - name: gemini
+      type: dns
+      domain: generativelanguage.googleapis.com
+      port: 443
+
+    # 🛡️ A6 API 中转渠道
+    - name: a6api
+      type: dns
+      domain: api.a6api.com
+      port: 443
+
+    # 🌕 元衡 API 渠道
+    - name: yuanheng
+      type: dns
+      domain: cn.meta-api.vip
+      port: 443
