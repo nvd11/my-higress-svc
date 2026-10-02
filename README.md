@@ -89,9 +89,8 @@ my-higress-svc/
 │   └── DELIVERY_GOALS.md       # 四阶段交付目标与里程碑计划
 ├── plugins/                    # 自研 Wasm-Go 扩展插件源码
 │   └── finops-audit/           # 财务审计与 VictoriaLogs 异步投递插件
-├── deploy/                     # 部署与配置模版
-│   ├── docker-compose.yaml     # 本地单机快速试驾与压测环境
-│   └── k8s/                    # 云原生生产集群交付图纸 (Gateway API / CRD)
+├── deploy/                     # 云原生生产交付图纸 (K8s / ArgoCD)
+│   └── k8s/                    # Gateway API / CRD / Higress 编排清单
 ├── frontend/                   # 完整迁移的 React 18 + Vite + Tailwind 前端大屏源码
 └── services/dashboard-api/     # 完整迁移的看板查询与报文透视 API 模块
 ```

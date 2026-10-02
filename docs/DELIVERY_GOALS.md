@@ -26,34 +26,36 @@
 gantt
     title my-higress-svc 实施里程碑计划
     dateFormat  YYYY-MM-DD
-    section Phase 1: 极速试驾与基准压测
-    单机容器化环境搭建          :p1_1, 2026-09-28, 2d
-    官方 ai-proxy 插件验证      :p1_2, after p1_1, 2d
-    700k 上下文首字延迟对比压测   :p1_3, after p1_2, 2d
+    section Phase 1: K3s 云原生沙盒与基准验证
+    ArgoCD 沙盒应用注册与 K3s 编排  :p1_1, 2026-09-28, 2d
+    官方 ai-proxy CRD 插件验证      :p1_2, after p1_1, 2d
+    700k 上下文首字延迟对比压测      :p1_3, after p1_2, 2d
     section Phase 2: Wasm-Go 插件研发
-    设计 Wasm-Go 插件工程脚手架  :p2_1, after p1_3, 2d
-    开发 MySQL 异步审计落库逻辑 :p2_2, after p2_1, 3d
-    开发 VictoriaLogs Gzip 归档 :p2_3, after p2_2, 2d
-    插件单元测试与性能调优      :p2_4, after p2_3, 2d
+    设计 Wasm-Go 插件工程脚手架     :p2_1, after p1_3, 2d
+    开发 MySQL 异步审计落库逻辑     :p2_2, after p2_1, 3d
+    开发 VictoriaLogs Gzip 归档     :p2_3, after p2_2, 2d
+    插件编译 (wasm32-wasip1) 与调优 :p2_4, after p2_3, 2d
     section Phase 3: 看板对接与端到端闭环
-    FastAPI 查询层与大屏联合部署 :p3_1, after p2_4, 2d
-    抽屉式 Payload 穿透链路验证  :p3_2, after p3_1, 2d
-    汇率折算与多租户 Key 审计验收 :p3_3, after p3_2, 2d
-    section Phase 4: K3s 上云与 GitOps 交付
-    编写 ArgoCD GitOps 部署图纸  :p4_1, after p3_3, 2d
-    灰度引流与全量割接上线      :p4_2, after p4_1, 2d
+    FastAPI 查询层与大屏联合部署    :p3_1, after p2_4, 2d
+    抽屉式 Payload 穿透链路验证     :p3_2, after p3_1, 2d
+    汇率折算与多租户 Key 审计验收    :p3_3, after p3_2, 2d
+    section Phase 4: 生产全量割接与 GitOps 收敛
+    完善生产级多架构镜像 CI/CD     :p4_1, after p3_3, 2d
+    OCI ALB 流量割接与旧网关退役     :p4_2, after p4_1, 2d
 ```
 
 ---
 
-### 🏁 里程碑 1：单机容器化试驾与极限性能对比 (Phase 1: Sandbox & Benchmarking)
-- **目标**：在不触动线上环境的前提下，快速在测试主机拉起 Higress 独立实例，用事实数据验证其长上下文处理能力。
+### 🏁 里程碑 1：K3s 云原生沙盒搭建与极限性能验证 (Phase 1: K3s Cloud-Native Sandbox on oci-free-arm-vm)
+- **目标**：彻底摒弃本地 docker-compose 中间层，与现有 `litellm-svc` 保持完全一致的交付标准，直接在 OCI ARM 旗舰节点 `free-arm-vm` 上通过 ArgoCD 注册部署 Higress K3s 独立沙盒，直连现有内网与上游，验证超长上下文处理能力。
 - **具体交付项**：
-  1. `docker-compose.yaml`：一键拉起 Higress Standalone 容器；
-  2. `envoy.yaml` / `higress-config.yaml`：配置官方内置 `ai-proxy` 直连 Google Gemini 3.8 Flash；
-  3. `benchmark/test_long_context.py`：针对 100k、350k、700k 上下文进行基准测试；
+  1. `deploy/k8s/`：K8s 原生声明式配置清单（Deployment、Service、WasmPlugin/McpBridge）；
+  2. `argocd-apps/higress-sandbox-app.yaml`：在主人的 `my-argocd-manifests` 注册沙盒 App；
+  3. 配置官方内置 `ai-proxy` 直连 Google Gemini 3.8 Flash；
+  4. `benchmark/test_long_context.py`：针对 100k、350k、700k 上下文进行基准测试；
 - **验收标准**：
-  - [ ] 成功使用 curl 通过 Higress 调用 Gemini 3.8 Flash 获得有效流式输出；
+  - [ ] ArgoCD 显示 `Synced / Healthy`，Higress Pod 成功在 `free-arm-vm` (ARM64) 稳定就绪；
+  - [ ] 成功使用 curl 通过 K3s Ingress/NodePort 调用 Gemini 3.8 Flash 获得有效流式输出；
   - [ ] 700k 上下文首字延迟（TTFT）代理损耗小于 5ms，容器内存稳定在 80MB 以内。
 
 ---
@@ -122,9 +124,9 @@ my-higress-svc/
 │       ├── vlogs_sink.go       # 异步 VictoriaLogs 报文推送与压缩
 │       └── go.mod              # Go 依赖描述文件
 ├── deploy/
-│   ├── docker-compose.yaml     # 本地测试与基准评测环境
-│   └── k8s/                    # 云原生生产交付图纸
+│   └── k8s/                    # 云原生生产交付图纸 (Gateway API / CRD / ArgoCD)
 │       ├── higress-config.yaml # 网关核心配置与模型路由表
-│       └── wasm-plugin.yaml    # WasmPlugin CRD 挂载描述
+│       ├── wasm-plugin.yaml    # WasmPlugin CRD 挂载描述
+│       └── argocd-app.yaml     # ArgoCD Application 注册清单
 └── frontend/                   # 移植保留的 React 18 可观测大屏工程
 ```
