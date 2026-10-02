@@ -23,7 +23,7 @@
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────┐
-│ 第一阶段：编写 LLM 模型转译配置 (deploy/k8s/routes/)                  │
+│ 第一阶段：编写 LLM 模型转译配置 (根目录维护)                          │
 │ • ai-proxy.yaml: 8大模型映射、Google Gemini 原生直连、Fallback 保底矩阵 │
 │ • hermes-passthrough.yaml: /hermes/* 本地无损直通路由                  │
 │ （注意：对外入站 HTTPRoute 统筹于 my-argocd-manifests 声明，与 Gateway 解耦）│
@@ -58,7 +58,7 @@
 
 此阶段直接产出网关的核心大脑。
 
-### 2.1 文件路径：`deploy/k8s/routes/ai-proxy.yaml`
+### 2.1 文件路径：`ai-proxy.yaml` (位于项目根目录)
 用于定义已收敛的模型矩阵（仅保留 3.8 全家福）、转译协议、以及熔断降级链。
 
 ```yaml
@@ -125,7 +125,7 @@ spec:
           "gpt-5.6-luna-yuanheng": "gpt-5.6-luna"
 ```
 
-### 2.2 文件路径：`deploy/k8s/routes/hermes-passthrough.yaml`
+### 2.2 文件路径：`hermes-passthrough.yaml` (位于项目根目录)
 将本地自主 Agent（Yui、Rin）的流式调用无损直通内网跳板机（`100.115.214.26`），保留其原生 `tool.progress` 状态事件，不经由 ai-proxy 转译。
 
 ```yaml
@@ -305,11 +305,11 @@ spec:
       helm:
         valueFiles:
           - $values/deploy/k8s/values.yaml
-    # 2. 挂载当前代码仓库的模型路由与 ExternalSecret 清单
+    # 2. 挂载当前代码仓库根目录的模型配置与 ExternalSecret 清单
     - repoURL: https://github.com/nvd11/my-higress-svc.git
       targetRevision: main
       ref: values
-      path: deploy/k8s/routes
+      path: .
   destination:
     # 交付至腾讯云业务集群 B (tencent-dp1-cluster)
     server: https://43.139.214.231:6443

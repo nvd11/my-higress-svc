@@ -84,13 +84,18 @@
 my-higress-svc/
 ├── README.md                   # 项目工程说明书（当前文件）
 ├── .gitignore                  # Git 忽略规则
+├── ai-proxy.yaml               # 核心大模型映射、Google 直连与 Fallback 规则 (WasmPlugin)
+├── hermes-passthrough.yaml     # 本地自主 Agent (Yui/Rin) 裸流无损直通路由
 ├── docs/
 │   ├── REQUIREMENTS.md         # 详细需求规格说明书 (痛点与功能矩阵)
-│   └── DELIVERY_GOALS.md       # 四阶段交付目标与里程碑计划
+│   ├── DELIVERY_GOALS.md       # 四阶段交付目标与里程碑计划
+│   ├── ARCHITECTURE.md         # 核心技术架构设计书 (方案 A + Wasm 数据面)
+│   ├── COMPATIBILITY.md        # 资产兼容契约手册 (MySQL DDL / VictoriaLogs 协议)
+│   └── DEPLOYMENT_GUIDE.md     # 生产环境全链路部署与实施实操指南
 ├── plugins/                    # 自研 Wasm-Go 扩展插件源码
 │   └── finops-audit/           # 财务审计与 VictoriaLogs 异步投递插件
 ├── deploy/                     # 云原生生产交付图纸 (K8s / ArgoCD)
-│   └── k8s/                    # Gateway API / CRD / Higress 编排清单
+│   └── k8s/                    # Helm values 与集群编排清单
 ├── frontend/                   # 完整迁移的 React 18 + Vite + Tailwind 前端大屏源码
 └── services/dashboard-api/     # 完整迁移的看板查询与报文透视 API 模块
 ```

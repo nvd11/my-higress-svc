@@ -51,7 +51,7 @@ gantt
 - **具体交付项**：
   1. `deploy/k8s/values.yaml`：定制化 Helm Values 配置（ARM64 调度、资源配额与日志等级）；
   2. `deploy/k8s/argocd-app.yaml`：在主人的 `my-argocd-manifests` 注册沙盒 App；
-  3. `deploy/k8s/routes/`：模型路由与官方内置 `ai-proxy` CRD 配置（直连 Google Gemini 3.8 Flash）；
+  3. `ai-proxy.yaml` / `hermes-passthrough.yaml`：根目录维护模型转译与官方内置 `ai-proxy` CRD 配置；
   4. `benchmark/test_long_context.py`：针对 100k、350k、700k 上下文进行基准测试；
 - **验收标准**：
   - [ ] ArgoCD 显示 `Synced / Healthy`，Higress Pod 成功在 `free-arm-vm` (ARM64) 稳定就绪；
@@ -111,12 +111,16 @@ gantt
 ```text
 my-higress-svc/
 ├── README.md                   # 项目全局工程架构与快速起步指南
+├── ai-proxy.yaml               # 核心大模型映射、Google 直连与 Fallback 规则 (WasmPlugin)
+├── hermes-passthrough.yaml     # 本地自主 Agent (Yui/Rin) 裸流无损直通路由
 ├── Dockerfile                  # 容器多阶段构建流水线
 ├── Makefile                    # 插件编译、打包与本地压测快捷指令
 ├── docs/
 │   ├── REQUIREMENTS.md         # 详细需求规格说明书 (100% 对齐业务)
 │   ├── DELIVERY_GOALS.md       # 本交付目标与里程碑计划
-│   └── ARCHITECTURE.md         # Higress 与 Envoy Wasm 核心原理设计图
+│   ├── ARCHITECTURE.md         # Higress 与 Envoy Wasm 核心原理设计图
+│   ├── COMPATIBILITY.md        # 资产兼容契约手册 (MySQL DDL / VictoriaLogs 协议)
+│   └── DEPLOYMENT_GUIDE.md     # 生产环境全链路部署与实施实操指南
 ├── plugins/
 │   └── finops-audit/           # 自研 Wasm-Go 财务审计与冷归档插件
 │       ├── main.go             # 插件入口与 Higress 生命周期钩子
@@ -126,8 +130,6 @@ my-higress-svc/
 ├── deploy/
 │   └── k8s/                    # 云原生生产交付图纸 (方案 A: Helm + ArgoCD)
 │       ├── values.yaml         # 定制化 Helm Values (ARM64 调度与网关参数)
-│       ├── argocd-app.yaml     # ArgoCD Application 注册清单
-│       ├── routes/             # 模型转译与直通插件清单 (ai-proxy, hermes)
 │       └── wasm-plugin.yaml    # WasmPlugin CRD 挂载描述
 └── frontend/                   # 移植保留的 React 18 可观测大屏工程
 ```
