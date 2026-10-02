@@ -249,7 +249,7 @@ higress-gateway:
 ### 文件路径：`secrets.yaml` (位于项目根目录)
 
 ```yaml
-apiVersion: external-secrets.io/v1beta1
+apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
   name: higress-ai-secrets
