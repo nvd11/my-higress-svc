@@ -40,7 +40,36 @@ CREATE TABLE IF NOT EXISTS `llm_request_logs` (
 
 ---
 
-## 2. 报文冷归档格式 (StarFive VictoriaLogs)
+## 2. 多租户 Virtual Key 鉴权与 Consumer 契约 (Zero-DB Key Management)
+
+### 2.1 鉴权机制与字段映射
+- **旧系统映射**：在旧版 LiteLLM 中，每个 API Key 在 PostgreSQL `lite_llm_keys` 中拥有一条记录，对应的 `key_alias`（例如 `jayden`）在记录请求时写入 `llm_request_logs.api_key_alias`；
+- **新系统规范**：Higress 采用 Kubernetes 声明式 `Consumer` CRD，在 etcd 维护租户身份，经由 Envoy 纯内存哈希鉴权：
+  - 客户端携带：`Authorization: Bearer <CONSUMER_KEY>`；
+  - 匹配 `Consumer.metadata.name` ➔ 自动注入为 `llm_request_logs.api_key_alias` 字段；
+  - 0 查库网络 I/O，鉴权延迟压降至 `< 0.05ms`。
+
+### 2.2 租户 Consumer 标准定义规范 (以同事 Jayden 为例)
+```yaml
+apiVersion: extensions.higress.io/v1alpha1
+kind: Consumer
+metadata:
+  # 对应 llm_request_logs 表的 api_key_alias 字段值
+  name: jayden-team
+  namespace: higress-system
+spec:
+  authConfig:
+    keyAuth:
+      # 分发给 Jayden 的真实 Virtual Key
+      key: "sk-jayden-production-key"
+  metadata:
+    team: "jayden"
+    cost_center: "risk-analytics"
+```
+
+---
+
+## 3. 报文冷归档格式 (StarFive VictoriaLogs)
 
 ### 2.1 投递协议与 Endpoint
 - **写入端点**：`POST http://10.0.1.227:9428/insert/jsonl`
@@ -70,7 +99,7 @@ CREATE TABLE IF NOT EXISTS `llm_request_logs` (
 
 ---
 
-## 3. 汇率折算与模型单价对账规范 (FinOps Pricing)
+## 4. 汇率折算与模型单价对账规范 (FinOps Pricing)
 
 ### 3.1 结算汇率获取机制 (FX Rate Engine)
 1. **优先获取**：从中国银行实时外汇牌价缓存拉取当日 `USD/CNY` 现汇卖出价；
@@ -93,7 +122,7 @@ CREATE TABLE IF NOT EXISTS `llm_request_logs` (
 
 ---
 
-## 4. 可观测性看板后端 API 契约 (Dashboard API)
+## 5. 可观测性看板后端 API 契约 (Dashboard API)
 
 迁移后的 `dashboard-api` 需保持以下 RESTful 端点契约 100% 不变：
 
