@@ -36,6 +36,9 @@ type AuditLogRecord struct {
 	StatusCode       int       `json:"status_code"`
 	ErrorMsg         string    `json:"error_msg"`
 	CreatedAt        time.Time `json:"created_at"`
+	// 携带原始报文供给 Dashboard-API 写入 Redis 与 VictoriaLogs
+	Prompt   string `json:"prompt,omitempty"`
+	Response string `json:"response,omitempty"`
 }
 
 // CalculateCost 封装调用核心纯算费逻辑
