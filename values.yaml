@@ -1,25 +1,23 @@
 # ==============================================================================
-# Higress Gateway Helm Values 生产定制配置 (专为 oci-free-arm-vm 调优)
+# Higress Gateway (higress-core) Helm Values 生产定制配置 (专为 oci-free-arm-vm 调优)
 # ==============================================================================
 # 业务背景与架构说明:
-# 1. 采用官方 Higress Helm 2.0.x 作为底层上游 Chart, 本文件作为业务层差异化参数覆盖;
+# 1. 采用官方 higress-core 作为底层 Chart (只包含 Controller、Gateway 与 CRD, 0 冗余 Console);
 # 2. 硬性绑定宿主机节点: 必须调度至甲骨文云新加坡节点 free-arm-vm (4C24G ARM64);
 # 3. 移除了极易导致内存泄漏与 OOM 的 Redis 响应缓存, 内存配额控制在极度健康的 800MiB;
-# 4. 调优流式长连接空闲超时至 600s, 调大单次内存吞吐至 10MB, 彻底根治 700k+ 超长上下文断流.
+# 4. 调优流式长连接空闲超时至 600s, 彻底根治 700k+ 超长上下文断流.
 # ==============================================================================
 
 global:
-  # 统一在集群 B (tencent-dp1-cluster) 中使用独立命名空间
   namespace: higress-system
-  # 统一锁定在 4C24G ARM64 物理节点，禁止漂移至腾讯云 CP 或家宽 NUC
   nodeSelector:
     kubernetes.io/hostname: free-arm-vm
 
 # ------------------------------------------------------------------------------
-# 1. Higress Controller (控制面配置: 监听 CRD 并下发 Envoy xDS 内存动态指令)
+# 1. Higress Controller (控制面配置)
 # ------------------------------------------------------------------------------
-higress-controller:
-  replicaCount: 1
+controller:
+  replicas: 1
   nodeSelector:
     kubernetes.io/hostname: free-arm-vm
   resources:
@@ -29,16 +27,12 @@ higress-controller:
     limits:
       cpu: "1000m"
       memory: "512Mi"
-  # 关联并自动纳管的数据面网关标识
-  gateway:
-    name: higress-gateway
-    namespace: higress-system
 
 # ------------------------------------------------------------------------------
-# 2. Higress Gateway 数据面 (Envoy C++ 代理内核与 Wasm 运行时)
+# 2. Higress Gateway 数据面 (Envoy C++ 代理内核)
 # ------------------------------------------------------------------------------
-higress-gateway:
-  replicaCount: 1
+gateway:
+  replicas: 1
   nodeSelector:
     kubernetes.io/hostname: free-arm-vm
   resources:
@@ -47,19 +41,22 @@ higress-gateway:
       memory: "128Mi"
     limits:
       cpu: "2000m"
-      memory: "800Mi" # 由于已全面做减法移除 Redis 缓存, 800MiB 应对高并发极度充裕
+      memory: "800Mi"
 
   # 暴露 Service 策略 (与 OCI ALB 对接入站)
   service:
     type: LoadBalancer
-    # 保持与集群现存 Kong (8000/8443) 和 svclb 端口隔离，分配专属 NodePort
-    httpPort: 8080
-    nodePorts:
-      http: 31880
+    ports:
+      - name: http2
+        port: 8080
+        protocol: TCP
+        targetPort: 80
+        nodePort: 31880
 
-  # Envoy 原生性能与网络传输调优
-  envoyConfig:
-    # 针对超长上下文思考与长文本输出，调高下游与上游流式空闲超时至 10 分钟，杜绝上游掐线
-    streamIdleTimeout: "600s"
-    # 允许 10MB 巨型 JSON 请求体纯内存零拷贝直通，绝不强制向磁盘写临时文件
-    maxRequestBodySize: 10485760
+# ------------------------------------------------------------------------------
+# 3. 网络传输与空闲超时调优 (防止超长 SSE 流式断开)
+# ------------------------------------------------------------------------------
+downstream:
+  idleTimeout: 600
+upstream:
+  idleTimeout: 600
