@@ -143,7 +143,7 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config PluginConfig, body []byt
 		// 计算美金开销与人民币折算
 		costUSD, costCNY := CalculateCost(modelRequested, promptTokens, completionTokens, reasoningTokens, config.DefaultFxRate)
 
-		// 构造 MySQL 审计日志实体 (100% 对齐 COMPATIBILITY.md)
+		// 构造 MySQL 与后端中转实体 (100% 对齐 COMPATIBILITY.md)
 		auditRecord := AuditLogRecord{
 			ID:               uuid.NewString(),
 			RequestID:        reqID,
@@ -162,20 +162,22 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config PluginConfig, body []byt
 			LatencyMS:        latency,
 			StatusCode:       statusCode,
 			CreatedAt:        time.Now(),
+			Prompt:           prompt,
+			Response:         fullResponse,
 		}
 
 		// 构造 VictoriaLogs 冷归档实体
 		vlogsRecord := VictoriaLogsPayload{
 			RequestID:        reqID,
-			ModelRequested:   modelRequested,
-			ModelUsed:        modelRequested,
-			APIKeyAlias:      apiKeyAlias,
+			Model:            modelRequested,
+			KeyAlias:         apiKeyAlias,
 			Prompt:           prompt,
 			Response:         fullResponse,
 			PromptTokens:     promptTokens,
 			CompletionTokens: completionTokens,
 			ReasoningTokens:  reasoningTokens,
 			TotalTokens:      totalTokens,
+			Spend:            costUSD,
 			StatusCode:       statusCode,
 			LatencyMS:        latency,
 		}
