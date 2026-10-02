@@ -1,0 +1,51 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache-dependency-path: plugins/finops-audit/go.sum
+
+      - name: Execute FinOps Core Unit Tests
+        run: |
+          cd plugins/finops-audit
+          CGO_ENABLED=0 go test -v ./pkg/finops
+
+  build-wasm:
+    name: Build WebAssembly Plugin
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup TinyGo
+        uses: acifani/setup-tinygo@v2
+        with:
+          tinygo-version: '0.33.0'
+
+      - name: Compile Wasm Binary
+        run: |
+          cd plugins/finops-audit
+          tinygo build -o plugin.wasm -target=wasi -gc=custom -tags="custom_malloc" .
+          echo "Wasm binary compiled successfully: $(ls -lh plugin.wasm | awk '{print $5}')"
+
+      - name: Upload Wasm Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: finops-audit-wasm
+          path: plugins/finops-audit/plugin.wasm
