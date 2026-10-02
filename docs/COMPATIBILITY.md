@@ -71,35 +71,62 @@ spec:
 
 ## 3. 报文冷归档格式 (StarFive VictoriaLogs)
 
-### 2.1 投递协议与 Endpoint
-- **写入端点**：`POST http://10.0.1.227:9428/insert/jsonl`
+### 3.1 投递协议与 Endpoint
+- **写入端点**：`POST http://10.0.1.227:9428/insert/jsonline`（注意：必须为 `jsonline` 规范端点）
 - **传输压缩**：`Content-Encoding: gzip`
+- **Stream 标签**：`_stream: '{env="prod",service="litellm",type="payload"}'`（100% 保持与老系统一致，确保 LogsQL 联合检索不脱节）
+- **单块大小阈值**：单分片字符数限制在 `1,300,000` 字符（约 1.74MB），避开 VictoriaLogs 单行 1.9MB 硬上限。
 - **过滤预处理**：针对请求体或响应体中的 `data:image/...;base64,...` 正则匹配并折叠替换为 `[base64_image_collapsed: len=XXXXX]`，杜绝无效索引膨胀。
 
-### 2.2 JSONL 结构定义
+### 3.2 JSONLine 结构定义 (含分块支持)
 
 ```json
 {
   "_time": "2026-10-03T12:00:00.000Z",
-  "_stream": "{app=\"higress-gateway\", env=\"production\"}",
+  "_stream": "{env=\"prod\",service=\"litellm\",type=\"payload\"}",
+  "_msg": "LLM 调用日志: request_id=chatcmpl-xxxx, model=gemini-3.8-flash, status=200, latency=352ms",
+  "env": "prod",
+  "service": "litellm",
+  "type": "payload",
   "request_id": "chatcmpl-xxxx-xxxx",
-  "model_requested": "gemini-3.8-flash",
-  "model_used": "gemini-3.8-flash",
-  "api_key_alias": "opencode-cindy",
-  "prompt": "[{\"role\": \"user\", \"content\": \"Hello\"}]",
-  "response": "Hello! How can I assist you today?",
+  "model": "gemini-3.8-flash",
+  "key_alias": "opencode-cindy",
+  "status_code": 200,
+  "latency_ms": 352,
   "prompt_tokens": 12,
   "completion_tokens": 8,
   "reasoning_tokens": 0,
   "total_tokens": 20,
-  "status_code": 200,
-  "latency_ms": 352
+  "spend": 0.000039,
+  "shard_index": 1,
+  "total_shards": 1,
+  "prompt_chunk": "[{\"role\": \"user\", \"content\": \"Hello\"}]",
+  "prompt": "[{\"role\": \"user\", \"content\": \"Hello\"}]",
+  "response": "Hello! How can I assist you today?"
 }
 ```
 
 ---
 
-## 4. 汇率折算与模型单价对账规范 (FinOps Pricing)
+## 4. Redis L2 Payload 热缓存契约 (抽屉透视秒开引擎)
+
+为了保证 React 18 看板在点击历史记录时享受 **< 5ms** 的抽屉（Payload Drawer）瞬间滑开体验，系统必须同步维护 Redis 热缓存：
+
+### 4.1 缓存规范与生命周期
+- **缓存 Key 格式**：`litellm:payload:{request_id}`
+- **TTL 过期时间**：`259,200 秒`（严格对齐老系统的 3 天保存周期 `86400 * 3`）
+- **压缩与编码协议**：
+  1. 报文预处理：剔除/折叠图片超长 Base64；
+  2. 格式装配：序列化为 JSON 字符串 `{"prompt": <dict>, "response": <dict>}`；
+  3. 内存极速压缩：使用 `gzip.compress(..., compresslevel=1)`（相比裸 JSON 体积压减 80%~95%）；
+  4. 文本转码：通过 `base64.b64encode` 转为 ASCII 字符串写入 Redis；
+- **抽屉读取降级链路**：
+  - 第一步：`GET litellm:payload:{request_id}` ➔ 若命中，内存 Base64 解码 + Gzip 解压，**<1ms 极速直出**；
+  - 第二步：若未命中（缓存过期或重启），自动从 MySQL 获取 `created_at` 日期分区，向 VictoriaLogs 发起 LogsQL 聚合检索还原分片，作为兜底。
+
+---
+
+## 5. 汇率折算与模型单价对账规范 (FinOps Pricing)
 
 ### 3.1 结算汇率获取机制 (FX Rate Engine)
 1. **优先获取**：从中国银行实时外汇牌价缓存拉取当日 `USD/CNY` 现汇卖出价；
@@ -122,7 +149,7 @@ spec:
 
 ---
 
-## 5. 可观测性看板后端 API 契约 (Dashboard API)
+## 6. 可观测性看板后端 API 契约 (Dashboard API)
 
 迁移后的 `dashboard-api` 需保持以下 RESTful 端点契约 100% 不变：
 

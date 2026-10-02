@@ -36,26 +36,27 @@
 │  └───────────────────────────────────────────────────────────────────────┘  │
 │                                     │                                       │
 │  ┌──────────────────────────────────▼────────────────────────────────────┐  │
-│  │ 3. Wasm-Go 财务审计与冷归档插件 (finops-audit.wasm)                      │  │
-│  │    • 挂载于 OnHttpResponseBody 阶段 (仅在响应流结束/EOS 时触发旁路逻辑)     │  │
+│  │ 3. Wasm-Go 财务审计旁路插件 (finops-audit.wasm)                          │  │
+│  │    • 挂载于 OnHttpResponseBody 阶段 (仅在流结束/EOS 时异步触发)             │  │
 │  │    • 解析 Usage: Prompt / Completion / Reasoning Tokens 准确提取       │  │
-│  │    • 正则穿透折叠 Base64 图片，保护冷存储空间                             │  │
-│  └─────────────────┬─────────────────────────────────┬───────────────────┘  │
-└────────────────────┼─────────────────────────────────┼──────────────────────┘
-                     │                                 │
-     (A) 异步 HTTP POST JSONL (Gzip)    (B) 异步 HTTP POST 结构化日志
-                     │                                 │
-                     ▼                                 ▼
-      ┌─────────────────────────────┐   ┌─────────────────────────────┐
-      │ StarFive 星光板 VictoriaLogs │   │   Dashboard-API 内部写端点  │
-      │   (巨型原始报文无损冷存储)   │   │  (POST /api/v1/internal/log)│
-      └─────────────────────────────┘   └──────────────┬──────────────┘
-                                                       │ SQLAlchemy 连接池
-                                                       ▼
-                                        ┌─────────────────────────────┐
-                                        │     OCI MySQL HeatWave      │
-                                        │     (`llm_request_logs`)    │
-                                        └─────────────────────────────┘
+│  │    • 组装审计记录与原始报文，向内部中转端点发起单次极速异步 HTTP POST       │  │
+│  └──────────────────────────────────┬────────────────────────────────────┘  │
+└─────────────────────────────────────┼───────────────────────────────────────┘
+                                      │
+                                      ▼ 异步 HTTP POST (单次派发，0 毫秒主线程阻塞)
+                       ┌─────────────────────────────┐
+                       │   Dashboard-API 内部写入端点 │
+                       │ (POST /api/v1/internal/log) │
+                       └──────────────┬──────────────┘
+                                      │
+       ┌──────────────────────────────┼──────────────────────────────┐
+       │ (A) SQLAlchemy 连接池落库     │ (B) 3天热缓存 (Base64+Gzip)   │ (C) 永久冷归档 (Gzip JSONLine)
+       ▼                              ▼                              ▼
+┌─────────────────────────────┐┌─────────────────────────────┐┌─────────────────────────────┐
+│     OCI MySQL HeatWave      ││       K3s 业务集群 Redis     ││ StarFive 星光板 VictoriaLogs │
+│     (`llm_request_logs`)    ││(`litellm:payload:{request}`)││    (`/insert/jsonline`)     │
+│  实时大屏统计与 FinOps 账本  ││   抽屉 Payload 透视 <5ms 秒开 ││   海量原始报文动态聚合检索   │
+└─────────────────────────────┘└─────────────────────────────┘└─────────────────────────────┘
 ```
 
 ---
@@ -65,9 +66,9 @@
 | 决策点 | 选定方案 | 决策依据与架构收益 |
 | :--- | :--- | :--- |
 | **Reasoning Tokens 计量** | **在 MySQL 表中新增 `reasoning_tokens` 独立字段** | Gemini 3.8 等推理模型具备独立 `thoughts_token_count`。独立建列既保全了旧有统计逻辑，又能精准核算深度思考的财务消耗。 |
-| **MySQL 落库中转** | **复用 `dashboard-api` 提供内部接收端点** | Wasm-Go 沙箱受限于底层 Envoy ABI，**只支持 HTTP 客户端调用**，无法直接驱动 MySQL 二进制 TCP 协议。复用已有的 Python/FastAPI 模块，无需额外维护常驻 Sink 微服务，最大化节约 4C24G 实例内存。 |
-| **Wasm 编译工具链** | **标准 Go 1.24+ 配合 `GOOS=wasip1 GOARCH=wasm`** | 放弃 TinyGo，消除其 GC、反射受限及序列化第三方库报错的隐患；使用官方成熟的 Higress wasm-go SDK 构建跨平台标准字节码。 |
-| **缓存层策略** | **暂时移除 Redis 响应缓存** | Agent 场景下的巨型 Prompt 几乎无命中率，且历史发生过 2.0GB 报文快照反噬 OOM 的惨痛教训。网关专注于“极致吞吐与轻量”，去除多余状态依赖。 |
+| **三位一体落库中转架构** | **复用 `dashboard-api` 统筹落库 MySQL、Redis 与 VictoriaLogs** | Envoy Wasm 沙箱由于底层 ABI 限制，**只支持 HTTP 客户端调用，无法直接驱动 MySQL 二进制 TCP 协议与 Redis TCP 协议**。由 Wasm 插件单次异步 POST 原始报文与 Usage 交付 `dashboard-api`，后端复用现成的连接池同时搞定：① MySQL 审计落库；② 写入 Redis 热缓存实现抽屉 <5ms 秒开；③ 压入 VictoriaLogs 永久冷存。一次调用，三路落地，架构极简且稳定性最高！ |
+| **Redis 缓存职责边界** | **保留 Payload L2 抽屉热缓存（3天），移除响应缓存** | 明确拆分两种缓存：**彻底砍掉大模型生成结果的“响应缓存”**（Agent 场景命中率几乎为 0 且容易 OOM）；**完全保留并继承“抽屉报文热缓存 (`litellm:payload:{request_id}`)”**，采用 `gzip.compress` + `base64` 存储，单条体积缩减 90%，确保大屏抽屉瞬间滑开。 |
+| **Wasm 编译工具链** | **标准 Go 编写业务逻辑 (本地单测秒跑) + CI/TinyGo 产出 Wasm 字节码** | 纯算费与文本折叠逻辑零依赖下沉到 `pkg/finops`，本地通过标准 Go SDK 执行单元测试（0.005s）；云端 CI 针对 `wasi` 目标打包轻量机器二进制。 |
 | **多模型收敛** | **全系淘汰 3.7，主力与保底全部收敛为 Gemini 3.8** | 简化 Fallback 链路为一级快速降级：`gemini-3.8-flash (原生)` ➔ `gemini-3.8-backup (A6 API)`。 |
 | **控制面持久化与 Virtual Key 存储** | **零外部数据库依赖 (Stateless) + 基于 K8s etcd 的 Consumer CRD** | 彻底抛弃旧版 LiteLLM 对 Neon PostgreSQL 的沉重依赖。网关配置与对外分发的 Virtual Key (如分发给 Jayden 等业务端) 统一通过 Kubernetes 原生 `Consumer` CRD 声明，数据稳固持久化于 K3s 内部 etcd，由 Envoy 在 C++ 内存建立 $O(1)$ 哈希表进行微秒级鉴权，鉴权元数据直通 FinOps 审计账本。 |
 | **K8s 交付与 CRD 纳管** | **方案 A：基于官方 Helm Chart 的 ArgoCD 一键全托管** | 彻底摒弃手动维护 CRD 定义的繁重负担。由 ArgoCD 声明式拉取官方 Higress Helm 仓库，自动装配 Controller、数据面 Pod 与扩展 CRD (`WasmPlugin`, `McpBridge`)，业务仓库仅维护差异化 `values.yaml` 与路由清单。 |
