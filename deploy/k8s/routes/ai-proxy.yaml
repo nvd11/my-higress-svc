@@ -1,0 +1,79 @@
+# ==============================================================================
+# Higress AI-Proxy 核心多模型转译与路由配置文件
+# ==============================================================================
+# 业务背景与架构说明:
+# 1. 采用 Higress 官方 WasmPlugin (ai-proxy) 扩展协议转换能力;
+# 2. 统一将前端标准 OpenAI 补全协议 (/v1/chat/completions) 动态转译为各上游格式;
+# 3. 开启 streamUsage 确保流式返回在最后一块 Chunk 带上精确 Token 消耗 (含 Reasoning Tokens);
+# 4. 凭证通过 SecretRef 动态引用由 ExternalSecrets 同步生成的 higress-ai-secrets, 0 密码泄露.
+# ==============================================================================
+
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: ai-proxy
+  namespace: higress-system
+  labels:
+    app.kubernetes.io/name: higress-ai-gateway
+    app.kubernetes.io/part-of: my-higress-svc
+spec:
+  priority: 100
+  matchRules:
+    - ingress:
+        - higress-system/higress-gateway
+  defaultConfig:
+    # 🎯 确保网关对所有流式 (stream=true) 请求在结束时精准输出 Usage 统计
+    streamUsage: true
+
+    providers:
+      # ========================================================================
+      # 1. 🟢 主力日常活跃组 (Google Gemini 官方直连，原生转译，支持 1M 超长上下文与思考)
+      # ========================================================================
+      - id: gemini-official
+        type: gemini
+        apiTokens:
+          - secretRef:
+              name: higress-ai-secrets
+              key: OPENAI_API_KEY_FREE_3
+        modelMapping:
+          "gemini-3.8-flash": "gemini-3.8-flash"
+        # 🎯 极速 Fallback 熔断降级链：主力一旦触发超时或异常，毫秒级无缝滑落至 A6 中转保底
+        fallback:
+          targetProvider: a6api
+          targetModel: "gemini-3.8-flash"
+
+      # ========================================================================
+      # 2. 🛡️ 应急保底与深度推理组 (A6 API 中转渠道，无限并发保底通道)
+      # ========================================================================
+      - id: a6api
+        type: openai
+        serviceUrl: "https://api.a6api.com/v1"
+        apiTokens:
+          - secretRef:
+              name: higress-ai-secrets
+              key: A6_API_KEY
+        modelMapping:
+          "gemini-3.8-backup": "gemini-3.8-flash"
+          "kimi-k3": "kimi-k3"
+          "glm-5.3": "glm-5.3"
+          "gpt-5.6-luna-a6": "gpt-5.6-luna"
+        # 🎯 Luna 互为降级容灾：A6 通道异常时，滑落至元衡 API 渠道
+        fallback:
+          targetProvider: yuanheng
+          targetModel: "gpt-5.6-luna"
+
+      # ========================================================================
+      # 3. 🌕 GPT-5.6 Luna 备用双通道 (元衡 API 优质组直连)
+      # ========================================================================
+      - id: yuanheng
+        type: openai
+        serviceUrl: "https://cn.meta-api.vip/v1"
+        apiTokens:
+          - secretRef:
+              name: higress-ai-secrets
+              key: META_API_KEY
+        modelMapping:
+          "gpt-5.6-luna-yuanheng": "gpt-5.6-luna"
+        fallback:
+          targetProvider: a6api
+          targetModel: "gpt-5.6-luna"
