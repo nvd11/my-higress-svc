@@ -23,6 +23,8 @@ spec:
     - ingress:
         - higress-system/higress-ai-ingress
   defaultConfig:
+    # 🎯 默认激活的主力 Provider 标识 (多 Provider 架构必须显式指定)
+    activeProviderId: "gemini-official"
     # 🎯 确保网关对所有流式 (stream=true) 请求在结束时精准输出 Usage 统计
     streamUsage: true
 
