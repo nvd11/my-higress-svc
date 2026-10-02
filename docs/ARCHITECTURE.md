@@ -69,6 +69,7 @@
 | **Wasm 编译工具链** | **标准 Go 1.24+ 配合 `GOOS=wasip1 GOARCH=wasm`** | 放弃 TinyGo，消除其 GC、反射受限及序列化第三方库报错的隐患；使用官方成熟的 Higress wasm-go SDK 构建跨平台标准字节码。 |
 | **缓存层策略** | **暂时移除 Redis 响应缓存** | Agent 场景下的巨型 Prompt 几乎无命中率，且历史发生过 2.0GB 报文快照反噬 OOM 的惨痛教训。网关专注于“极致吞吐与轻量”，去除多余状态依赖。 |
 | **多模型收敛** | **全系淘汰 3.7，主力与保底全部收敛为 Gemini 3.8** | 简化 Fallback 链路为一级快速降级：`gemini-3.8-flash (原生)` ➔ `gemini-3.8-backup (A6 API)`。 |
+| **控制面持久化与 Virtual Key 存储** | **零外部数据库依赖 (Stateless) + 基于 K8s etcd 的 Consumer CRD** | 彻底抛弃旧版 LiteLLM 对 Neon PostgreSQL 的沉重依赖。网关配置与对外分发的 Virtual Key (如分发给 Jayden 等业务端) 统一通过 Kubernetes 原生 `Consumer` CRD 声明，数据稳固持久化于 K3s 内部 etcd，由 Envoy 在 C++ 内存建立 $O(1)$ 哈希表进行微秒级鉴权，鉴权元数据直通 FinOps 审计账本。 |
 | **K8s 交付与 CRD 纳管** | **方案 A：基于官方 Helm Chart 的 ArgoCD 一键全托管** | 彻底摒弃手动维护 CRD 定义的繁重负担。由 ArgoCD 声明式拉取官方 Higress Helm 仓库，自动装配 Controller、数据面 Pod 与扩展 CRD (`WasmPlugin`, `McpBridge`)，业务仓库仅维护差异化 `values.yaml` 与路由清单。 |
 
 ---
@@ -124,7 +125,40 @@ sequenceDiagram
 
 ---
 
-## 5. 生产环境部署拓扑与 GitOps 交付 (Production Deployment & GitOps)
+## 5. 零控制面数据库架构与 Virtual Key (Consumer CRD) 鉴权机制
+
+与旧版 LiteLLM 必须强依赖外部关系型数据库（如 Neon PostgreSQL）维护 `lite_llm_keys` 表不同，本项目彻底摒弃外部控制面数据库，实现**真正的云原生无状态（Stateless）与微秒级内存鉴权**：
+
+### 5.1 数据存储宿主：K3s 原生 etcd
+- **存储介质**：网关的全部模型映射、路由规则、以及给同事/业务端（如 Jayden）下发的 Virtual Key，**全部持久化于 Kubernetes 自身的 etcd**；
+- **资源形态**：基于官方标准的 `Consumer` CRD（定义在 `higress-system` 命名空间下）；
+- **生命周期**：天然享有集群原生备份、容灾与随集群漂移能力，0 外部 DB 运维开销。
+
+### 5.2 鉴权与校验流：Envoy 纯 C++ 内存哈希表 ($O(1)$)
+1. **热加载注入**：当在集群中创建或更新一个 `Consumer` 对象时，Higress Controller 监听该事件，并通过 xDS 动态将 Key 映射灌入 Envoy 内存；
+2. **零网络 I/O 鉴权**：业务端发起带 `Authorization: Bearer <VIRTUAL_KEY>` 的请求到达网关时，Envoy 直接在本地 C++ 内存哈希表中比对，耗时 `< 0.05ms`（彻底消除查库带来的 15ms~50ms 延迟损耗）；
+3. **审计元数据自动传递**：鉴权通过后，Envoy 自动在请求上下文注入该 Consumer 的标识（如 `team=jayden`），后续 Wasm 审计插件在结束流时直接提取此标识写入 MySQL `llm_request_logs.api_key_alias` 字段。
+
+### 5.3 Virtual Key 声明规范样例 (如为 Jayden 团队配发)
+```yaml
+apiVersion: extensions.higress.io/v1alpha1
+kind: Consumer
+metadata:
+  name: jayden-team
+  namespace: higress-system
+spec:
+  authConfig:
+    keyAuth:
+      # 分发给业务端的真实 Virtual Key
+      key: "sk-jayden-risk-analytics-token"
+  metadata:
+    team: "jayden"
+    cost_center: "risk-analytics"
+```
+
+---
+
+## 6. 生产环境部署拓扑与 GitOps 交付 (Production Deployment & GitOps)
 
 ### 5.1 方案 A：基于官方 Helm Chart 的 ArgoCD 自动化纳管架构
 网关采用 **方案 A（官方 Helm Chart 声明式交付）**。CRD 无需团队自行维护与编译，全部交由 ArgoCD 生命周期管理：
