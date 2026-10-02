@@ -79,7 +79,7 @@ gantt
   2. `app/` 或 `services/dashboard-api/`：将提供 `/api/v1/logs`、`/api/v1/metrics/summary` 及 `/api/v1/logs/{request_id}/payload` 的查询模块与 SQLAlchemy/VictoriaLogs 交互逻辑完整迁入；
   3. `Dockerfile` 多阶段构建集成：前端在 Stage 1 编译生成静态包，Stage 2 统一装配；
   4. 验证前端点击调用列表时，能够通过 MySQL 字段正确定位并拉取 VictoriaLogs 的归档报文；
-  5. 验证多模型 Fallback（如 Gemini 3.8 失败时无缝切换到 Gemini 3.7 或备用渠道）。
+  5. 验证多模型 Fallback（如 Gemini 3.8 直连失败时无缝切换到 `gemini-3.8-backup` 中转渠道）。
 - **验收标准**：
   - [ ] 看板代码在 `my-higress-svc` 内部直接自闭环编译打包，无需依赖原 `my-litellm-service` 代码库；
   - [ ] 主人能在浏览器中顺畅打开可观测大屏，实时刷新出通过 Higress 产生的调用流水；

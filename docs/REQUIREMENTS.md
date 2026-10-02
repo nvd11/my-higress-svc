@@ -72,9 +72,10 @@
 
 ### F2: 多模型路由与多提供商生态
 - **主力原生组**：
-  - `gemini-3.8-flash` & `gemini-3.7-flash`：直连 Google AI Studio / Gemini 原生 REST 接口，支持 1M 超长上下文与深度思考（Thinking/Reasoning）特性。
+  - `gemini-3.8-flash`：直连 Google AI Studio / Gemini 原生 REST 接口，支持 1M 超长上下文与深度思考（Thinking/Reasoning）特性。
+  - *（2026-10-03 决策：Gemini 3.7 全系退役，网关仅保留 3.8 家族，模型矩阵收敛。）*
 - **应急保底组**：
-  - `gemini-3.8-backup`：接入 A6 API 渠道。
+  - `gemini-3.8-backup`：接入 A6 API 渠道（同为 Gemini 3.8 Flash 中转通道）。
   - `kimi-k3`、`glm-5.3`、`gpt-5.6-luna`：接入高可用中转渠道。
 - **本地 Agent 直通**：
   - `yui` & `rin`：私网直连本地 Hermes Agent，保留原生 `tool.progress` 流式状态。
