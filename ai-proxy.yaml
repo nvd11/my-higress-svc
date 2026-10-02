@@ -18,6 +18,7 @@ metadata:
     app.kubernetes.io/part-of: my-higress-svc
 spec:
   priority: 100
+  url: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-proxy:1.0.0
   matchRules:
     - ingress:
         - higress-system/higress-ai-ingress
