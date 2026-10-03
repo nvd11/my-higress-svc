@@ -18,6 +18,7 @@ import (
 )
 
 var thoughtSigCache sync.Map // map[string]string: callID / toolName -> thoughtSignature
+var callIDToName sync.Map    // map[string]string: callID -> functionName
 
 func main() {
 	port := os.Getenv("PORT")
@@ -219,6 +220,19 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 		},
 	}
 
+	// 预先建立本轮请求内所有 tool_calls 的 ID -> Name 快速反查表
+	localToolMap := make(map[string]string)
+	for _, m := range req.Messages {
+		if m.Role == "assistant" {
+			for _, tc := range m.ToolCalls {
+				if tc.ID != "" && tc.Function.Name != "" {
+					localToolMap[tc.ID] = tc.Function.Name
+					callIDToName.Store(tc.ID, tc.Function.Name)
+				}
+			}
+		}
+	}
+
 	for _, msg := range req.Messages {
 		contentStr := ""
 		switch v := msg.Content.(type) {
@@ -288,12 +302,29 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 			if err := json.Unmarshal([]byte(contentStr), &respMap); err != nil {
 				respMap = map[string]interface{}{"content": contentStr}
 			}
+
+			// 严格确保 FunctionResponse.Name 非空，防止 Google 400
+			toolName := msg.Name
+			if toolName == "" && msg.ToolCallID != "" {
+				if n, ok := localToolMap[msg.ToolCallID]; ok {
+					toolName = n
+				} else if v, ok := callIDToName.Load(msg.ToolCallID); ok {
+					toolName = v.(string)
+				}
+			}
+			if toolName == "" && len(req.Tools) > 0 {
+				toolName = req.Tools[0].Function.Name
+			}
+			if toolName == "" {
+				toolName = "default_api"
+			}
+
 			gReq.Contents = append(gReq.Contents, GoogleContent{
 				Role: "user",
 				Parts: []GooglePart{
 					{
 						FunctionResponse: &GoogleFunctionResponse{
-							Name:     msg.Name,
+							Name:     toolName,
 							Response: respMap,
 						},
 					},
@@ -446,6 +477,8 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 						callID = "call_" + uuid.New().String()[:8]
 					}
 
+					callIDToName.Store(callID, part.FunctionCall.Name)
+
 					if part.ThoughtSignature != "" {
 						thoughtSigCache.Store(callID, part.ThoughtSignature)
 						thoughtSigCache.Store(part.FunctionCall.Name, part.ThoughtSignature)
@@ -572,6 +605,7 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 			if callID == "" {
 				callID = "call_" + uuid.New().String()[:8]
 			}
+			callIDToName.Store(callID, part.FunctionCall.Name)
 			if part.ThoughtSignature != "" {
 				thoughtSigCache.Store(callID, part.ThoughtSignature)
 				thoughtSigCache.Store(part.FunctionCall.Name, part.ThoughtSignature)
