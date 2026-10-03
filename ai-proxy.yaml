@@ -34,7 +34,13 @@ spec:
       # ========================================================================
       - id: gemini-official
         type: gemini
-        # 🎯 根治 Hermes Agent 思考块剥离导致正文为空的 BUG: 设为 0 关闭隐式思考，强制输出纯正文
+        # 🎯 彻底放开 Google 原生安全审查过滤，防止复杂技术代码与系统指令被误判拦截
+        geminiSafetySetting:
+          HARM_CATEGORY_HARASSMENT: BLOCK_NONE
+          HARM_CATEGORY_HATE_SPEECH: BLOCK_NONE
+          HARM_CATEGORY_SEXUALLY_EXPLICIT: BLOCK_NONE
+          HARM_CATEGORY_DANGEROUS_CONTENT: BLOCK_NONE
+          HARM_CATEGORY_CIVIC_INTEGRITY: BLOCK_NONE
         geminiThinkingBudget: 0
         apiTokens:
           - secretRef:
