@@ -10,11 +10,14 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
+
+var thoughtSigCache sync.Map // map[string]string: callID / toolName -> thoughtSignature
 
 func main() {
 	port := os.Getenv("PORT")
@@ -132,6 +135,7 @@ type GoogleContent struct {
 
 type GooglePart struct {
 	Text             string                  `json:"text,omitempty"`
+	ThoughtSignature string                  `json:"thoughtSignature,omitempty"`
 	FunctionCall     *GoogleFunctionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *GoogleFunctionResponse `json:"functionResponse,omitempty"`
 }
@@ -248,7 +252,21 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 			for _, tc := range msg.ToolCalls {
 				var args map[string]interface{}
 				_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+
+				sig := ""
+				if tc.ID != "" {
+					if v, ok := thoughtSigCache.Load(tc.ID); ok {
+						sig = v.(string)
+					}
+				}
+				if sig == "" && tc.Function.Name != "" {
+					if v, ok := thoughtSigCache.Load(tc.Function.Name); ok {
+						sig = v.(string)
+					}
+				}
+
 				parts = append(parts, GooglePart{
+					ThoughtSignature: sig,
 					FunctionCall: &GoogleFunctionCall{
 						Name: tc.Function.Name,
 						Args: args,
@@ -428,6 +446,11 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 						callID = "call_" + uuid.New().String()[:8]
 					}
 
+					if part.ThoughtSignature != "" {
+						thoughtSigCache.Store(callID, part.ThoughtSignature)
+						thoughtSigCache.Store(part.FunctionCall.Name, part.ThoughtSignature)
+					}
+
 					chunk := gin.H{
 						"id":      chatCmplID,
 						"object":  "chat.completion.chunk",
@@ -548,6 +571,10 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 			callID := part.FunctionCall.ID
 			if callID == "" {
 				callID = "call_" + uuid.New().String()[:8]
+			}
+			if part.ThoughtSignature != "" {
+				thoughtSigCache.Store(callID, part.ThoughtSignature)
+				thoughtSigCache.Store(part.FunctionCall.Name, part.ThoughtSignature)
 			}
 			outToolCalls = append(outToolCalls, gin.H{
 				"id":   callID,
