@@ -19,6 +19,8 @@ import (
 	"github.com/nvd11/my-higress-svc/services/dashboard-api/vlogs"
 )
 
+const Version = "v1.0.0-higress"
+
 func main() {
 	cfg := config.LoadConfig()
 
@@ -94,7 +96,7 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("🚀 Higress Dashboard API (Go Edition) listening on port :%s", cfg.Port)
+		log.Printf("🚀 Higress Dashboard API (Go Edition %s) listening on port :%s", Version, cfg.Port)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("listen error: %s\n", err)
 		}
