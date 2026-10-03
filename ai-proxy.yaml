@@ -34,6 +34,8 @@ spec:
       # ========================================================================
       - id: gemini-official
         type: gemini
+        # 🎯 根治 Hermes Agent 思考块剥离导致正文为空的 BUG: 设为 0 关闭隐式思考，强制输出纯正文
+        geminiThinkingBudget: 0
         apiTokens:
           - secretRef:
               name: higress-ai-secrets
