@@ -55,24 +55,6 @@ func main() {
 	r.Use(gin.Recovery())
 	r.Use(gin.Logger())
 
-	r.NoRoute(func(c *gin.Context) {
-		log.Printf("⚠️ Incoming Unmatched Path: %s, Method: %s", c.Request.URL.Path, c.Request.Method)
-		if strings.Contains(c.Request.URL.Path, "chat/completions") {
-			handleChatCompletion(c, apiKey)
-			return
-		}
-		if strings.Contains(c.Request.URL.Path, "models") {
-			c.JSON(http.StatusOK, gin.H{
-				"object": "list",
-				"data": []gin.H{
-					{"id": "gemini-3.8-flash", "object": "model", "owned_by": "google"},
-				},
-			})
-			return
-		}
-		c.JSON(http.StatusNotFound, gin.H{"error": "route not found", "path": c.Request.URL.Path})
-	})
-
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "service": "gemini-adapter-sidecar"})
 	})
@@ -95,6 +77,19 @@ func main() {
 	r.POST("/chat/completions", handleChat)
 	r.POST("/v1/chat/completions", handleChat)
 
+	r.NoRoute(func(c *gin.Context) {
+		log.Printf("⚠️ Incoming Unmatched Path: %s, Method: %s", c.Request.URL.Path, c.Request.Method)
+		if strings.Contains(c.Request.URL.Path, "chat/completions") {
+			handleChatCompletion(c, apiKey)
+			return
+		}
+		if strings.Contains(c.Request.URL.Path, "models") {
+			handleModels(c)
+			return
+		}
+		c.JSON(http.StatusNotFound, gin.H{"error": "route not found", "path": c.Request.URL.Path})
+	})
+
 	log.Printf("🚀 Gemini Official SDK Adapter listening on port :%s", port)
 	if err := r.Run(":" + port); err != nil {
 		log.Fatalf("failed starting adapter: %v", err)
@@ -112,7 +107,6 @@ func handleChatCompletion(c *gin.Context, defaultAPIKey string) {
 	authHeader := c.GetHeader("Authorization")
 	if strings.HasPrefix(authHeader, "Bearer ") {
 		token := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
-		// 如果客户端传的是真实的 Google AI Studio 密钥 (以 AIza 开头)，优先使用客户端传递的
 		if strings.HasPrefix(token, "AIza") {
 			key = token
 		}
@@ -131,7 +125,6 @@ func handleChatCompletion(c *gin.Context, defaultAPIKey string) {
 	}
 	defer client.Close()
 
-	// 统一绑定 gemini-3.8-flash 模型
 	modelName := "gemini-3.8-flash"
 	model := client.GenerativeModel(modelName)
 
@@ -143,27 +136,7 @@ func handleChatCompletion(c *gin.Context, defaultAPIKey string) {
 		{Category: genai.HarmCategoryDangerousContent, Threshold: genai.HarmBlockNone},
 	}
 
-	// 2. 映射 OpenAI 消息至 Google SDK 格式
-	var cs []*genai.Content
-	for _, m := range req.Messages {
-		role := "user"
-		if m.Role == "assistant" {
-			role = "model"
-		} else if m.Role == "system" {
-			// Google SDK 原生支持独立系统指令
-			model.SystemInstruction = &genai.Content{
-				Parts: []genai.Part{genai.Text(extractTextContent(m.Content))},
-			}
-			continue
-		}
-
-		cs = append(cs, &genai.Content{
-			Role:  role,
-			Parts: []genai.Part{genai.Text(extractTextContent(m.Content))},
-		})
-	}
-
-	// 3. 核心突破: 使用 Google 官方 SDK 完美注册工具集 (Tool Declarations)
+	// 2. 注册工具集 (Tool Declarations)
 	if len(req.Tools) > 0 {
 		var funcDecls []*genai.FunctionDeclaration
 		for _, t := range req.Tools {
@@ -171,7 +144,6 @@ func handleChatCompletion(c *gin.Context, defaultAPIKey string) {
 				Name:        t.Function.Name,
 				Description: t.Function.Description,
 			}
-			// 转换 JSON Schema 参数
 			if len(t.Function.Parameters) > 0 {
 				paramBytes, _ := json.Marshal(t.Function.Parameters)
 				var schema genai.Schema
@@ -184,19 +156,63 @@ func handleChatCompletion(c *gin.Context, defaultAPIKey string) {
 		model.Tools = []*genai.Tool{{FunctionDeclarations: funcDecls}}
 	}
 
-	// 4. 流式 SSE 响应输出
+	// 3. 🎯 核心重构: 严格区分 System 指令、多轮历史 History 与 最后一轮 Prompt
+	var history []*genai.Content
+	var lastUserParts []genai.Part
+
+	for i, m := range req.Messages {
+		text := extractTextContent(m.Content)
+		if text == "" {
+			continue
+		}
+
+		if m.Role == "system" {
+			model.SystemInstruction = &genai.Content{
+				Parts: []genai.Part{genai.Text(text)},
+			}
+			continue
+		}
+
+		role := "user"
+		if m.Role == "assistant" {
+			role = "model"
+		}
+
+		content := &genai.Content{
+			Role:  role,
+			Parts: []genai.Part{genai.Text(text)},
+		}
+
+		// 如果是最后一个消息且是用户，作为当前调用的 Prompt
+		if i == len(req.Messages)-1 && role == "user" {
+			lastUserParts = content.Parts
+		} else {
+			history = append(history, content)
+		}
+	}
+
+	if len(lastUserParts) == 0 {
+		lastUserParts = []genai.Part{genai.Text("Hello")}
+	}
+
+	// 4. 启动官方多轮会话
+	cs := model.StartChat()
+	if len(history) > 0 {
+		cs.History = history
+	}
+
+	// 5. 流式 SSE 响应输出
 	if req.Stream {
 		c.Writer.Header().Set("Content-Type", "text/event-stream")
 		c.Writer.Header().Set("Cache-Control", "no-cache")
 		c.Writer.Header().Set("Connection", "keep-alive")
 
-		iter := model.GenerateContentStream(ctx, contentsToParts(cs)...)
+		iter := cs.SendMessageStream(ctx, lastUserParts...)
 		reqID := "chatcmpl-" + uuid.NewString()
 
 		c.Stream(func(w io.Writer) bool {
 			resp, err := iter.Next()
 			if err == iterator.Done {
-				// 输出最终完成块与 [DONE]
 				doneChunk := map[string]interface{}{
 					"id":      reqID,
 					"object":  "chat.completion.chunk",
@@ -228,7 +244,6 @@ func handleChatCompletion(c *gin.Context, defaultAPIKey string) {
 					delta := map[string]interface{}{}
 					finishReason := interface{}(nil)
 
-					// 🎯 核心解决: 完整转译流式 FunctionCall ➔ OpenAI delta.tool_calls
 					if fnCall, ok := part.(genai.FunctionCall); ok {
 						argsBytes, _ := json.Marshal(fnCall.Args)
 						delta["tool_calls"] = []map[string]interface{}{
@@ -269,10 +284,10 @@ func handleChatCompletion(c *gin.Context, defaultAPIKey string) {
 		return
 	}
 
-	// 5. 非流式响应输出
-	resp, err := model.GenerateContent(ctx, contentsToParts(cs)...)
+	// 6. 非流式响应输出
+	resp, err := cs.SendMessage(ctx, lastUserParts...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Google GenerateContent Error: %v", err)})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Google SendMessage Error: %v", err)})
 		return
 	}
 
@@ -339,12 +354,4 @@ func extractTextContent(content interface{}) string {
 	}
 	b, _ := json.Marshal(content)
 	return string(b)
-}
-
-func contentsToParts(contents []*genai.Content) []genai.Part {
-	var parts []genai.Part
-	for _, c := range contents {
-		parts = append(parts, c.Parts...)
-	}
-	return parts
 }
