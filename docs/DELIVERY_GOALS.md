@@ -74,16 +74,17 @@ gantt
 
 ---
 
-### 🏁 里程碑 3：看板代码完整迁移与端到端闭环验证 (Phase 3: Dashboard Code Migration & Unification)
-- **目标**：将原项目的 React 18 前端工程与后端数据查询/透视 API 代码**完整迁移至当前仓库**，实现完全独立的自包含看板交付。
+### 🏁 里程碑 3：看板代码洁癖解耦与端到端闭环验证 (Phase 3: Clean Decoupled Dashboard & Full E2E Verification)
+- **目标**：彻底拒绝前后端混杂的胶水方案，将后端纯 Go 重构为高性能 RESTful 数据引擎（<30MB），前台作为独立 React 18 SPA 工程（Nginx <15MB），由网关在同域名下按路径分流，实现真正的云原生微服务解耦与零跨域（0 CORS）访问。
 - **具体交付项**：
-  1. `frontend/`：将原项目的 Vite + React 18 + Tailwind CSS 源码完整迁入，保留所有图表、Token 统计与抽屉交互组件；
-  2. `app/` 或 `services/dashboard-api/`：将提供 `/api/v1/logs`、`/api/v1/metrics/summary` 及 `/api/v1/logs/{request_id}/payload` 的查询模块与 SQLAlchemy/VictoriaLogs 交互逻辑完整迁入；
-  3. `Dockerfile` 多阶段构建集成：前端在 Stage 1 编译生成静态包，Stage 2 统一装配；
-  4. 验证前端点击调用列表时，能够通过 MySQL 字段正确定位并拉取 VictoriaLogs 的归档报文；
+  1. `services/dashboard-api/`：纯 Go 重构的数据查询与三位一体中转落库模块，包含 `/api/v1/logs`、`/api/v1/metrics/summary`、`/api/v1/logs/{id}/payload`（Redis L1 + VLogs L2）及 `/api/v1/internal/audit-log`（单测覆盖率 83%+）；
+  2. `frontend/`：独立 React 18 + Vite + Tailwind CSS 源码工程，包含专属 `Dockerfile` (Nginx Alpine) 与 `nginx.conf`；
+  3. `.github/workflows/`：独立解耦的两套自动化 CI/CD 流水线（`backend-ci-cd.yml` 与 `frontend-ci-cd.yml`），原生支持 `linux/arm64` 并自动推送到 GHCR；
+  4. 验证前端点击调用列表时，能够秒级从 Redis L1 缓存解压并滑出抽屉（Payload Drawer），未命中时无缝从 VictoriaLogs 动态重组分片；
   5. 验证多模型 Fallback（如 Gemini 3.8 直连失败时无缝切换到 `gemini-3.8-backup` 中转渠道）。
 - **验收标准**：
-  - [ ] 看板代码在 `my-higress-svc` 内部直接自闭环编译打包，无需依赖原 `my-litellm-service` 代码库；
+  - [ ] 前端与后端均拥有独立的 Dockerfile 与 CI/CD，改前端不编译后端，改后端不干扰前端；
+  - [ ] 后端代码 100% 纯粹，0 静态 HTML/CSS 胶水代码，单测覆盖率达到 80%+；
   - [ ] 主人能在浏览器中顺畅打开可观测大屏，实时刷新出通过 Higress 产生的调用流水；
   - [ ] 抽屉式报文透视（Payload Drawer）能秒级解压并高亮展示 Prompt 和 Response。
 
@@ -130,5 +131,6 @@ my-higress-svc/
 ├── values.yaml                 # 定制化 Helm Values (ARM64 调度与网关参数)
 ├── secrets.yaml                # OCI Vault 自动化 ExternalSecret 凭证声明
 ├── wasm-plugin.yaml            # 自研 WasmPlugin CRD 挂载描述 (Phase 2 产物)
-└── frontend/                   # 移植保留的 React 18 可观测大屏工程
+├── frontend/                   # 独立 React 18 SPA 前台工程 (Dockerfile + Nginx <15MB)
+└── services/dashboard-api/     # 纯 Go 重构的 RESTful JSON 后台引擎 (Dockerfile <30MB)
 ```
