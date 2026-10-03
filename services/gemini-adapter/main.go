@@ -58,7 +58,7 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "service": "gemini-adapter-sidecar"})
 	})
 
-	r.GET("/v1/models", func(c *gin.Context) {
+	handleModels := func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"object": "list",
 			"data": []gin.H{
@@ -66,11 +66,15 @@ func main() {
 				{"id": "gemini-3.8-backup", "object": "model", "owned_by": "google"},
 			},
 		})
-	})
+	}
+	r.GET("/models", handleModels)
+	r.GET("/v1/models", handleModels)
 
-	r.POST("/v1/chat/completions", func(c *gin.Context) {
+	handleChat := func(c *gin.Context) {
 		handleChatCompletion(c, apiKey)
-	})
+	}
+	r.POST("/chat/completions", handleChat)
+	r.POST("/v1/chat/completions", handleChat)
 
 	log.Printf("🚀 Gemini Official SDK Adapter listening on port :%s", port)
 	if err := r.Run(":" + port); err != nil {
