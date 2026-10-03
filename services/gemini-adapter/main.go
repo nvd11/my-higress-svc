@@ -106,6 +106,8 @@ func handleGeminiNativeProxy(c *gin.Context, defaultAPIKey string) {
 		upstreamURL += "&" + c.Request.URL.RawQuery
 	}
 
+	log.Printf("👉 Body Size: %d, Key: %s..., URL: %s", len(rawBody), key[:min(len(key), 8)], upstreamURL)
+
 	httpReq, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, upstreamURL, bytes.NewReader(rawBody))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
