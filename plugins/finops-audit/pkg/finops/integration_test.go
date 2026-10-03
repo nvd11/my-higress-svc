@@ -65,6 +65,8 @@ func TestE2EProductionGatewayWithRedisAndVLogs(t *testing.T) {
 		t.Fatalf("failed to create http request: %v", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	// 💖 携带主人赐予的大秘 Cindy 专属令牌发起鉴权调用
+	httpReq.Header.Set("Authorization", "Bearer sk-cindy-higress-20261003-888888")
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(httpReq)
