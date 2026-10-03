@@ -36,19 +36,20 @@ func main() {
 		path := c.Request.URL.Path
 		log.Printf("📥 Ingesting request: %s %s", c.Request.Method, path)
 
-		// 1. 如果是 Google 原生协议请求 (由 Higress ai-proxy 转发过来)
+		// 1. 如果是 Google 原生协议生成请求 (包含 generateContent 或 streamGenerateContent)
 		if strings.Contains(path, "generateContent") {
 			handleGeminiNativeProxy(c, apiKey)
 			return
 		}
 
-		// 2. 如果是 OpenAI 协议请求 (/v1/chat/completions)
+		// 2. 如果是 OpenAI 补全协议 (/v1/chat/completions)
 		if strings.Contains(path, "chat/completions") {
 			handleOpenAIStyle(c, apiKey)
 			return
 		}
 
-		if strings.Contains(path, "models") {
+		// 3. 严格精确匹配模型列表接口，绝不能用模糊 Contains 误伤生成接口
+		if path == "/models" || path == "/v1/models" || path == "/v1beta/models" {
 			c.JSON(http.StatusOK, gin.H{
 				"object": "list",
 				"data": []gin.H{
