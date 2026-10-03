@@ -72,6 +72,7 @@
 | **多模型收敛** | **全系淘汰 3.7，主力与保底全部收敛为 Gemini 3.8** | 简化 Fallback 链路为一级快速降级：`gemini-3.8-flash (原生)` ➔ `gemini-3.8-backup (A6 API)`。 |
 | **控制面持久化与 Virtual Key 存储** | **零外部数据库依赖 (Stateless) + 基于 K8s etcd 的 Consumer CRD** | 彻底抛弃旧版 LiteLLM 对 Neon PostgreSQL 的沉重依赖。网关配置与对外分发的 Virtual Key (如分发给 Jayden 等业务端) 统一通过 Kubernetes 原生 `Consumer` CRD 声明，数据稳固持久化于 K3s 内部 etcd，由 Envoy 在 C++ 内存建立 $O(1)$ 哈希表进行微秒级鉴权，鉴权元数据直通 FinOps 审计账本。 |
 | **K8s 交付与 CRD 纳管** | **方案 A：基于官方 Helm Chart 的 ArgoCD 一键全托管** | 彻底摒弃手动维护 CRD 定义的繁重负担。由 ArgoCD 声明式拉取官方 Higress Helm 仓库，自动装配 Controller、数据面 Pod 与扩展 CRD (`WasmPlugin`, `McpBridge`)，业务仓库仅维护差异化 `values.yaml` 与路由清单。 |
+| **可观测大屏交付架构** | **前后端代码洁癖彻底解耦 + 统一网关同域分流 (0 CORS)** | 拒绝在 Go 后端塞入任何 HTML/静态资源胶水代码。后端 `dashboard-api` 作为纯粹的 RESTful JSON 引擎（<30MB）；前台 `frontend` 作为独立现代 React 18 SPA 工程（基于 `nginx:alpine` 独立镜像 <15MB）。统一由 Higress 网关在同域名下按路径分流（`/dashboard/*` ➔ 前台，`/api/v1/*` ➔ 后台），既达成 100% 架构洁癖，又享有无缝继承 Logto 单点登录与零跨域（0 CORS）的巨大红利！ |
 
 ---
 
@@ -159,7 +160,45 @@ spec:
 
 ---
 
-## 6. 生产环境部署拓扑与 GitOps 交付 (Production Deployment & GitOps)
+## 6. 可观测大屏前后端彻底解耦与同域分流架构 (Clean Code Decoupling)
+
+贯彻主人的**“代码洁癖”最高标准**，彻底拒绝将前端静态文件塞进 Go 后端服务的“伪单体”方案，实现真正的**云原生微服务物理隔离 + 外部用户无感知同域访问**：
+
+### 6.1 核心边界职责划分
+
+```text
+               浏览器 / 大屏用户 (访问统一域名: https://gw.jppwl.asia)
+                                      │
+                                      ▼
+                        OCI ALB ➔ Higress Gateway
+                                      │
+              ┌───────────────────────┴───────────────────────┐
+              │ PathPrefix: /dashboard/*                      │ PathPrefix: /api/v1/*
+              ▼                                               ▼
+   ┌──────────────────────┐                       ┌──────────────────────┐
+   │ 前台专属 Pod (Frontend)│                      │ 后台专属 Pod (Backend)│
+   │ 镜像: my-higress-frontend                    │ 镜像: my-higress-dashboard   │
+   │ 运行时: Nginx Alpine (<15MB)                  │ 运行时: 纯静态 Go 二进制 (<30MB)
+   │ 职责: 托管 React 18 静态包与                  │ 职责: 纯粹 RESTful JSON 接口,
+   │       SPA /dashboard/ 兜底路由               │       0 静态 HTML/CSS 胶水代码!
+   └──────────────────────┘                       └──────────────────────┘
+```
+
+### 6.2 架构收益与 Logto 鉴权无缝承接
+1. **零跨域烦恼 (Zero CORS)**：
+   - 虽然物理上拆分为两个独立的 Pod，但在用户浏览器看来，前端大屏（`/dashboard`）与后端 API（`/api/v1`）**完全同处于同一个顶级域名下**；
+   - 彻底省去了配置复杂的 CORS 跨域响应头，杜绝 `Preflight OPTIONS` 预检带来的额外网络跳数。
+2. **Logto 单点登录 100% 顺滑承接**：
+   - 浏览器 Cookie、Session 与 Token 天然在同域下安全流动，完美免疫跨站 Cookie（SameSite）拦截风险；
+   - 与老系统的 `oauth2-forward-auth` 网关拦截认证机制 100% 兼容。
+3. **独立 CI/CD 构建与敏捷交付**：
+   - 修改前端 UI 页面，只触发 `frontend-ci-cd.yml`（2.94 秒打包，Nginx 极简镜像上线）；
+   - 修改后端数据逻辑，只触发 `backend-ci-cd.yml`（跑 Go 单测，编译 Go 二进制上线）；
+   - 互不影响，彻底消灭“改个样式还要重编译整个后端”的工程冗余！
+
+---
+
+## 7. 生产环境部署拓扑与 GitOps 交付 (Production Deployment & GitOps)
 
 ### 5.1 方案 A：基于官方 Helm Chart 的 ArgoCD 自动化纳管架构
 网关采用 **方案 A（官方 Helm Chart 声明式交付）**。CRD 无需团队自行维护与编译，全部交由 ArgoCD 生命周期管理：
@@ -180,5 +219,6 @@ spec:
       └── K3s Pod 编排 (绑定 nodeSelector: kubernetes.io/hostname: free-arm-vm)
            ├── Pod: higress-controller (监听 CRD 并下发 xDS 配置)
            ├── Pod: higress-gateway (C++ Envoy 内核 + Wasm 运行时)
-           └── Pod: my-higress-dashboard (内嵌 React 18 SPA + FastAPI 后端)
+           ├── Pod: higress-dashboard-backend (纯 Go RESTful 数据引擎, 内存 ~20MB)
+           └── Pod: higress-dashboard-frontend (React 18 SPA + Nginx Alpine, 内存 ~5MB)
 ```

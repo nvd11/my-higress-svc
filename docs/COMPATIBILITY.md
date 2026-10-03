@@ -194,7 +194,12 @@ spec:
 - **端点**：`GET /api/v1/logs/{request_id}/payload`
 - **逻辑**：后端通过 `request_id` 查询 StarFive VictoriaLogs 归档，解压缩后返回 `prompt` 和 `response` 的完整 JSON 结构，供给前端抽屉高亮展开。
 
-### 4.4 [新增] Wasm 审计内部接收端点
+### 6.4 [新增] Wasm 审计内部接收端点
 - **端点**：`POST /api/v1/internal/audit-log`
 - **权限**：仅限 K8s Pod 内网或 localhost 访问
-- **作用**：接收 Wasm 插件异步发送的结构化审计对象，并批量或单条写入 MySQL。
+- **作用**：接收 Wasm 插件异步发送的结构化审计对象，并发落地 MySQL 账本、Redis 3天热缓存与 VictoriaLogs 冷存储。
+
+### 6.5 前端 SPA 静态资产契约 (Frontend Routing Contract)
+- **挂载根路径**：`base: "/dashboard/"`（所有静态 CSS/JS 资源统一以 `/dashboard/` 前缀请求）；
+- **SPA Fallback 规则**：由前端 Nginx 对 `/dashboard/*` 内部重定向至 `index.html`，支持页面在深层路径刷新不白屏；
+- **同域相对调用**：所有前端 Ajax 请求统一采用相对路径 `/api/v1/*`，由上层网关无缝转发给 Go 后台引擎，杜绝 CORS 跨域。

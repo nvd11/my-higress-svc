@@ -26,37 +26,40 @@
 ## 🏗️ 全局架构拓扑图
 
 ```text
-                  开发者 / OpenCode / Claude Code / Agent 妹妹们
+                  开发者 / OpenCode / Claude Code / 浏览器大屏用户
                                         │
-                                        ▼ HTTP/2 / HTTP/1.1
-                   OCI ALB (Layer 7 永久免费负载均衡器)
+                                        ▼ HTTPS (统一入口域名，前后端 100% 同域 0 CORS)
+                    OCI ALB (Layer 7 永久免费负载均衡器)
                                         │
                                         ▼ 灰云直连 (无 100s 超时限制)
-             ┌─────────────────────────────────────────────────────┐
-             │       Higress AI Gateway (Envoy C++ 内核)           │
-             │                                                     │
-             │  • 原生 ai-proxy 插件 (Google Gemini / A6 / 中转)    │
-             │  • 统一 OpenAI 规范端点 (/v1/chat/completions)       │
-             │  • 模型故障自动重试与 Fallback 降级                  │
-             │                                                     │
-             │  ┌───────────────────────────────────────────────┐  │
-             │  │   自研 Wasm-Go 财务审计与冷归档插件 (Cindy 编写) │  │
-             │  └───────────────────────┬───────────────────────┘  │
-             └──────────────────────────┼──────────────────────────┘
-                                        │
-                         ┌──────────────┴──────────────┐
-                         ▼ 异步入库                    ▼ 异步 Gzip 投递
-                 OCI MySQL HeatWave             StarFive 星光板
-                (`llm_request_logs`)           VictoriaLogs 冷存储
-                         │                             │
+              ┌─────────────────────────────────────────────────────┐
+              │       Higress AI Gateway (Envoy C++ 内核)           │
+              │                                                     │
+              │  • 原生 ai-proxy 插件 (Google Gemini 3.8 原生直连)   │
+              │  • Fallback 降级至 A6 API (gemini-3.8-backup)       │
+              │  • 本地自主 Agent 裸流直通 (/hermes/yui, /hermes/rin) │
+              │  • 前后端同域路径分流:                               │
+              │    - /dashboard/* ➔ 独立 React 18 前端 (Nginx <15MB)│
+              │    - /api/v1/*    ➔ 纯 Go 后端数据引擎 (<30MB)      │
+              │                                                     │
+              │  ┌───────────────────────────────────────────────┐  │
+              │  │  自研 Wasm-Go 财务审计旁路插件 (Cindy 编写)   │  │
+              │  └───────────────────────┬───────────────────────┘  │
+              └──────────────────────────┼──────────────────────────┘
+                                         │ 异步 HTTP POST (单次极速派发, 0 毫秒主线程阻塞)
+                                         ▼
+                         ┌─────────────────────────────┐
+                         │   Dashboard-API 纯 Go 后端  │
+                         │ (POST /api/v1/internal/log) │
                          └──────────────┬──────────────┘
-                                        ▼
-             ┌─────────────────────────────────────────────────────┐
-             │   现有 React 18 / Tailwind 可观测性大屏 (完美兼容)   │
-             │   • 实时 Token 流水与调用趋势大屏                    │
-             │   • 抽屉式原始报文秒级透视 (Payload Drawer)          │
-             │   • 每日中行实时汇率对账与 CNY 折算                 │
-             └─────────────────────────────────────────────────────┘
+                                        │
+         ┌──────────────────────────────┼──────────────────────────────┐
+         ▼ 异步入库                     ▼ 3天 Base64+Gzip 热缓存        ▼ 1.3MB 自动切片分块 + Gzip
+ ┌──────────────────────┐      ┌──────────────────────┐      ┌──────────────────────┐
+ │  OCI MySQL HeatWave  │      │  K3s 业务集群 Redis  │      │   StarFive 星光板    │
+ │ (`llm_request_logs`) │      │(`litellm:payload:*`) │      │     VictoriaLogs     │
+ │ 实时财务流水与 Token │      │ 抽屉透视 <5ms 极速开 │      │  海量原始报文永久冷存│
+ └──────────────────────┘      └──────────────────────┘      └──────────────────────┘
 ```
 
 ---
@@ -84,20 +87,26 @@
 my-higress-svc/
 ├── README.md                   # 项目工程说明书（当前文件）
 ├── .gitignore                  # Git 忽略规则
+├── .github/workflows/          # 自动化 CI/CD 流水线 (多架构镜像构建与发布)
+│   ├── backend-ci-cd.yml       # 纯 Go 后端全量单测与 Docker 构建
+│   ├── frontend-ci-cd.yml      # React 18 前端 SPA 自动化构建
+│   └── ci.yml                  # Wasm-Go 插件编译流水线
 ├── ai-proxy.yaml               # 核心大模型映射、Google 直连与 Fallback 规则 (WasmPlugin)
 ├── hermes-passthrough.yaml     # 本地自主 Agent (Yui/Rin) 裸流无损直通路由
+├── mcp-bridge.yaml             # McpBridge 外部大模型上游 DNS 解析与连接池
+├── ingress.yaml                # Higress Ingress 业务入口绑定配置
 ├── values.yaml                 # 定制化 Helm Values (ARM64 调度与 Envoy 800Mi 调优)
 ├── secrets.yaml                # OCI Vault 自动化 ExternalSecret 凭证声明
 ├── docs/
 │   ├── REQUIREMENTS.md         # 详细需求规格说明书 (痛点与功能矩阵)
-│   ├── DELIVERY_GOALS.md       # 四阶段交付目标与里程碑计划
-│   ├── ARCHITECTURE.md         # 核心技术架构设计书 (方案 A + Wasm 数据面)
-│   ├── COMPATIBILITY.md        # 资产兼容契约手册 (MySQL DDL / VictoriaLogs 协议)
+│   ├── DELIVERY_GOALS.md       # 四阶段交付目标与实施里程碑计划
+│   ├── ARCHITECTURE.md         # 核心技术架构设计书 (方案 A + Wasm 数据面 + 前后端洁癖解耦)
+│   ├── COMPATIBILITY.md        # 资产兼容契约手册 (MySQL DDL / VictoriaLogs 协议 / Redis 缓存)
 │   └── DEPLOYMENT_GUIDE.md     # 生产环境全链路部署与实施实操指南
 ├── plugins/                    # 自研 Wasm-Go 扩展插件源码
-│   └── finops-audit/           # 财务审计与 VictoriaLogs 异步投递插件
-├── frontend/                   # 完整迁移的 React 18 + Vite + Tailwind 前端大屏源码
-└── services/dashboard-api/     # 完整迁移的看板查询与报文透视 API 模块
+│   └── finops-audit/           # 财务审计与 VictoriaLogs 异步投递插件 (单测 100% PASS)
+├── frontend/                   # 独立 React 18 + Vite + Tailwind 前端工程 (Nginx 独立镜像 <15MB)
+└── services/dashboard-api/     # 纯 Go 重构的 RESTful JSON 后端 (单测覆盖率 83%+, 镜像 <30MB)
 ```
 
 ---
