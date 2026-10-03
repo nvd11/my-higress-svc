@@ -70,6 +70,8 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig, log wrap
 	if token != "" && len(config.VirtualKeys) > 0 {
 		if alias, ok := config.VirtualKeys[token]; ok {
 			consumer = alias
+			// 🎯 核心安全加固: 剥离下游客户端传入的 Virtual Key，防止污染上游 Google 官方直连鉴权
+			_ = proxywasm.RemoveHttpRequestHeader("authorization")
 		} else {
 			// 如果配置了白名单密钥但未匹配上，拒绝未授权请求
 			_ = proxywasm.SendHttpResponse(401, [][2]string{{"Content-Type", "application/json"}}, []byte(`{"error":{"message":"Invalid Virtual Key","type":"invalid_request_error","code":"invalid_api_key"}}`))
@@ -115,10 +117,19 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config PluginConfig, log wra
 }
 
 func onHttpResponseBody(ctx wrapper.HttpContext, config PluginConfig, body []byte, log wrapper.Log) types.Action {
-	// 在流式场景下，积累最终响应内容
+	// 🎯 核心流式修补: 拦截并修复被官方 ai-proxy 阉割掉 tool_calls 的空壳 Chunk
 	if len(body) > 0 {
+		rawBodyStr := string(body)
+		if strings.HasPrefix(rawBodyStr, "data: {") {
+			chunkJSON := strings.TrimPrefix(rawBodyStr, "data: ")
+			chunkJSON = strings.TrimSpace(chunkJSON)
+			if repaired, modified := finops.RepairMalformedChunk(chunkJSON, rawBodyStr); modified {
+				_ = proxywasm.ReplaceHttpResponseBody([]byte("data: " + repaired + "\n\n"))
+			}
+		}
+
 		prevResp, _ := ctx.GetContext(ctxResponseBody).(string)
-		ctx.SetContext(ctxResponseBody, prevResp+string(body))
+		ctx.SetContext(ctxResponseBody, prevResp+rawBodyStr)
 	}
 
 	// 🎯 核心生命周期守则: 必须在 endOfStream (流传输彻底完毕) 时触发异步旁路处理
