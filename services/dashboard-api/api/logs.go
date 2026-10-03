@@ -13,6 +13,64 @@ import (
 )
 
 func RegisterLogsRoutes(rg *gin.RouterGroup, vlogsClient *vlogs.Client) {
+	// 动态获取筛选下拉框选项 (模型列表与 Key 别名列表)
+	rg.GET("/logs/filter-options", func(c *gin.Context) {
+		if db.DB == nil {
+			c.JSON(http.StatusOK, gin.H{
+				"models": []string{
+					"gemini-3.8-flash",
+					"gemini-3.8-backup",
+					"kimi-k3",
+					"glm-5.3",
+					"gpt-5.6-luna-a6",
+					"gpt-5.6-luna-yuanheng",
+					"yui",
+					"rin",
+				},
+				"key_aliases": []string{"default"},
+			})
+			return
+		}
+
+		var models []string
+		modelSql := `
+			SELECT model_used 
+			FROM llm_request_logs 
+			WHERE model_used IS NOT NULL AND model_used != '' AND model_used != 'unknown' AND model_used NOT LIKE '%/%'
+			GROUP BY model_used 
+			ORDER BY COUNT(*) DESC
+		`
+		_ = db.DB.SelectContext(c.Request.Context(), &models, modelSql)
+		if len(models) == 0 {
+			models = []string{
+				"gemini-3.8-flash",
+				"gemini-3.8-backup",
+				"kimi-k3",
+				"glm-5.3",
+				"gpt-5.6-luna-a6",
+				"gpt-5.6-luna-yuanheng",
+			}
+		}
+
+		var keyAliases []string
+		keySql := `
+			SELECT api_key_alias 
+			FROM llm_request_logs 
+			WHERE api_key_alias IS NOT NULL AND api_key_alias != '' AND api_key_alias != 'litellm-internal-health-check'
+			GROUP BY api_key_alias 
+			ORDER BY COUNT(*) DESC
+		`
+		_ = db.DB.SelectContext(c.Request.Context(), &keyAliases, keySql)
+		if len(keyAliases) == 0 {
+			keyAliases = []string{"default"}
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"models":      models,
+			"key_aliases": keyAliases,
+		})
+	})
+
 	rg.GET("/logs", func(c *gin.Context) {
 		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 		if page < 1 {
@@ -23,9 +81,15 @@ func RegisterLogsRoutes(rg *gin.RouterGroup, vlogsClient *vlogs.Client) {
 			pageSize = 20
 		}
 
-		model := c.Query("model")
+		model := c.Query("model_used")
+		if model == "" {
+			model = c.Query("model")
+		}
 		statusCodeStr := c.Query("status_code")
-		keyAlias := c.Query("key_alias")
+		keyAlias := c.Query("api_key_alias")
+		if keyAlias == "" {
+			keyAlias = c.Query("key_alias")
+		}
 		searchKeyword := c.Query("search")
 
 		whereClauses := []string{"1=1"}
