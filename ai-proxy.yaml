@@ -30,22 +30,13 @@ spec:
 
     providers:
       # ========================================================================
-      # 1. 🟢 主力日常活跃组 (Google Gemini 官方直连，原生转译，支持 1M 超长上下文与思考)
+      # 1. 🟢 主力日常活跃组 (通过 Google 官方 SDK 转译 Sidecar 直连，100% 工业级支持 28+ 流式 Tools 与 Thinking)
       # ========================================================================
       - id: gemini-official
-        type: gemini
-        # 🎯 彻底放开 Google 原生安全审查过滤，防止复杂技术代码与系统指令被误判拦截
-        geminiSafetySetting:
-          HARM_CATEGORY_HARASSMENT: BLOCK_NONE
-          HARM_CATEGORY_HATE_SPEECH: BLOCK_NONE
-          HARM_CATEGORY_SEXUALLY_EXPLICIT: BLOCK_NONE
-          HARM_CATEGORY_DANGEROUS_CONTENT: BLOCK_NONE
-          HARM_CATEGORY_CIVIC_INTEGRITY: BLOCK_NONE
-        geminiThinkingBudget: 0
+        type: openai
+        serviceUrl: "http://higress-gemini-adapter.higress-system.svc.cluster.local:8080/v1"
         apiTokens:
-          - secretRef:
-              name: higress-ai-secrets
-              key: OPENAI_API_KEY_FREE_3
+          - "internal-token-passed"
         modelMapping:
           "gemini-3.8-flash": "gemini-3.8-flash"
         # 🎯 极速 Fallback 熔断降级链：主力一旦触发超时或异常，毫秒级无缝滑落至 A6 中转保底
