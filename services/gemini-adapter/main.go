@@ -129,7 +129,21 @@ func handleGeminiNativeProxy(c *gin.Context, defaultAPIKey string) {
 		}
 	}
 	c.Writer.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(c.Writer, resp.Body)
+
+	flusher, hasFlusher := c.Writer.(http.Flusher)
+	buf := make([]byte, 4096)
+	for {
+		n, rErr := resp.Body.Read(buf)
+		if n > 0 {
+			_, _ = c.Writer.Write(buf[:n])
+			if hasFlusher {
+				flusher.Flush()
+			}
+		}
+		if rErr != nil {
+			break
+		}
+	}
 }
 
 // handleOpenAIStyle 接收标准的 OpenAI 请求，使用官方 Go SDK 驱动调用并返回合规格式
