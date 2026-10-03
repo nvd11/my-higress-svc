@@ -50,8 +50,18 @@ func RegisterMetricsRoutes(rg *gin.RouterGroup) {
 
 		startTime := time.Now().Add(-duration)
 
-		// 1. 聚合四大核心指标卡片
 		var cards SummaryCards
+		if db.DB == nil {
+			c.JSON(http.StatusOK, gin.H{
+				"time_range":          timeRange,
+				"cards":               cards,
+				"model_distribution":  []interface{}{},
+				"daily_trends":        []interface{}{},
+			})
+			return
+		}
+
+		// 1. 聚合四大核心指标卡片
 		summarySql := `
 			SELECT 
 				COUNT(*) as total_requests,

@@ -53,25 +53,27 @@ func RegisterInternalRoutes(rg *gin.RouterGroup, vlogsClient *vlogs.Client) {
 			defer cancel()
 
 			// 1. 写入 MySQL HeatWave (llm_request_logs)
-			insertSql := `
-				INSERT INTO llm_request_logs (
-					id, request_id, api_key_alias, model_requested, model_used,
-					provider, provider_key_alias, prompt_tokens, completion_tokens,
-					reasoning_tokens, total_tokens, cost_usd, cost_cny, fx_rate,
-					latency_ms, status_code, error_msg, created_at
-				) VALUES (
-					?, ?, ?, ?, ?,
-					?, ?, ?, ?,
-					?, ?, ?, ?, ?,
-					?, ?, ?, ?
+			if db.DB != nil {
+				insertSql := `
+					INSERT INTO llm_request_logs (
+						id, request_id, api_key_alias, model_requested, model_used,
+						provider, provider_key_alias, prompt_tokens, completion_tokens,
+						reasoning_tokens, total_tokens, cost_usd, cost_cny, fx_rate,
+						latency_ms, status_code, error_msg, created_at
+					) VALUES (
+						?, ?, ?, ?, ?,
+						?, ?, ?, ?,
+						?, ?, ?, ?, ?,
+						?, ?, ?, ?
+					)
+				`
+				_, _ = db.DB.ExecContext(ctx, insertSql,
+					rec.ID, rec.RequestID, rec.APIKeyAlias, rec.ModelRequested, rec.ModelUsed,
+					rec.Provider, rec.ProviderKeyAlias, rec.PromptTokens, rec.CompletionTokens,
+					rec.ReasoningTokens, rec.TotalTokens, rec.CostUSD, rec.CostCNY, rec.FxRate,
+					rec.LatencyMS, rec.StatusCode, rec.ErrorMsg, rec.CreatedAt,
 				)
-			`
-			_, _ = db.DB.ExecContext(ctx, insertSql,
-				rec.ID, rec.RequestID, rec.APIKeyAlias, rec.ModelRequested, rec.ModelUsed,
-				rec.Provider, rec.ProviderKeyAlias, rec.PromptTokens, rec.CompletionTokens,
-				rec.ReasoningTokens, rec.TotalTokens, rec.CostUSD, rec.CostCNY, rec.FxRate,
-				rec.LatencyMS, rec.StatusCode, rec.ErrorMsg, rec.CreatedAt,
-			)
+			}
 
 			// 解析 Prompt 和 Response 对象
 			var pObj map[string]interface{}

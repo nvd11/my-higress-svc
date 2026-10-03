@@ -64,6 +64,11 @@ func RegisterLogsRoutes(rg *gin.RouterGroup, vlogsClient *vlogs.Client) {
 
 		whereSql := strings.Join(whereClauses, " AND ")
 
+		if db.DB == nil {
+			c.JSON(http.StatusOK, gin.H{"total": 0, "page": page, "page_size": pageSize, "items": []interface{}{}})
+			return
+		}
+
 		// 统计总数
 		var total int
 		countSql := fmt.Sprintf("SELECT COUNT(*) FROM llm_request_logs WHERE %s", whereSql)

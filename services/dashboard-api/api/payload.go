@@ -34,8 +34,11 @@ func RegisterPayloadRoutes(rg *gin.RouterGroup, vlogsClient *vlogs.Client) {
 			// 2. Redis 未命中: 先到 MySQL 检索该记录创建时间 (作为 VictoriaLogs 日期加速分区)
 			if dateStr == "" {
 				var createdAt time.Time
-				rowErr := db.DB.GetContext(c.Request.Context(), &createdAt,
-					"SELECT created_at FROM llm_request_logs WHERE request_id = ? LIMIT 1", requestID)
+				var rowErr error
+				if db.DB != nil {
+					rowErr = db.DB.GetContext(c.Request.Context(), &createdAt,
+						"SELECT created_at FROM llm_request_logs WHERE request_id = ? LIMIT 1", requestID)
+				}
 				if rowErr == nil && !createdAt.IsZero() {
 					dateStr = createdAt.Format("2006-01-02")
 				} else {
