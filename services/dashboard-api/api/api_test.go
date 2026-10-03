@@ -212,36 +212,40 @@ func TestMetricsEndpointWithMockDB(t *testing.T) {
 	rate := 100.0
 	mock.ExpectQuery(`(?s)SELECT.*total_requests.*FROM llm_request_logs`).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"total_requests", "success_rate", "total_tokens", "prompt_tokens",
-			"completion_tokens", "reasoning_tokens", "total_cost_usd", "total_cost_cny", "avg_latency_ms",
-		}).AddRow(10, &rate, 1000, 400, 600, 100, 0.05, 0.36, 150.0))
+			"total_requests", "success_rate", "total_tokens", "total_cost_cny", "total_cost_usd", "avg_latency_ms",
+		}).AddRow(10, &rate, 1000, 0.36, 0.05, 150.0))
 
-	// 2. Mock Model Distribution
+	// 2. Mock Active Keys
+	mock.ExpectQuery(`(?s)SELECT.*api_key_alias.*FROM llm_request_logs`).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"api_key_alias", "cnt", "tokens", "cost_cny",
+		}).AddRow("default", 10, 1000, 0.36))
+
+	// 3. Mock Models Breakdown
 	mock.ExpectQuery(`(?s)SELECT.*model_used.*FROM llm_request_logs`).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"model_used", "spend_usd", "spend_cny", "call_count",
-		}).AddRow("gemini-3.8-flash", 0.05, 0.36, 10))
-
-	// 3. Mock Daily Trends
-	mock.ExpectQuery(`(?s)SELECT.*date_str.*FROM llm_request_logs`).
-		WillReturnRows(sqlmock.NewRows([]string{
-			"date_str", "spend_usd", "spend_cny", "requests",
-		}).AddRow("2026-10-03", 0.05, 0.36, 10))
+			"model_used", "cnt", "tokens", "cost_cny",
+		}).AddRow("gemini-3.8-flash", 10, 1000, 0.36))
 
 	r := setupTestEngineWithVLogs(nil)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/v1/metrics/summary?time_range=24h", nil)
+	req, _ := http.NewRequest("GET", "/api/v1/metrics/summary?date=2026-10-03", nil)
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	var resp map[string]interface{}
+	var resp SummaryMetricsResponse
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	cards := resp["cards"].(map[string]interface{})
-	if cards["total_requests"].(float64) != 10 {
-		t.Errorf("expected total_requests 10, got: %v", cards["total_requests"])
+	if resp.TodayRequests != 10 {
+		t.Errorf("expected today_requests 10, got: %d", resp.TodayRequests)
+	}
+	if resp.TodayTokens != 1000 {
+		t.Errorf("expected today_tokens 1000, got: %d", resp.TodayTokens)
+	}
+	if len(resp.ModelsBreakdown) != 1 || resp.ModelsBreakdown[0].Model != "gemini-3.8-flash" {
+		t.Errorf("expected models_breakdown populated: %v", resp.ModelsBreakdown)
 	}
 }
