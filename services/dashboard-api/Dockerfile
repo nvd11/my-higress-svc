@@ -27,9 +27,6 @@ RUN apk add --no-cache ca-certificates tzdata
 
 COPY --from=builder /app/dashboard-api /app/dashboard-api
 
-# 预留静态页面挂载目录
-RUN mkdir -p /app/static
-
 EXPOSE 4000
 
 ENV PORT=4000
