@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -72,24 +71,7 @@ func main() {
 		api.RegisterInternalRoutes(v1, vlogsClient)
 	}
 
-	// 8. 静态资源托管与 SPA 前端 Fallback
-	staticDir := "static"
-	if _, err := os.Stat(staticDir); os.IsNotExist(err) {
-		staticDir = "app/static"
-	}
-	if _, err := os.Stat(staticDir); err == nil {
-		r.Static("/assets", filepath.Join(staticDir, "assets"))
-		r.NoRoute(func(c *gin.Context) {
-			path := c.Request.URL.Path
-			if len(path) >= 4 && path[:4] == "/api" {
-				c.JSON(http.StatusNotFound, gin.H{"error": "API route not found"})
-				return
-			}
-			c.File(filepath.Join(staticDir, "index.html"))
-		})
-	}
-
-	// 9. 启动 HTTP 服务与优雅停机
+	// 8. 启动纯粹 HTTP API 服务与优雅停机
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,
 		Handler: r,
