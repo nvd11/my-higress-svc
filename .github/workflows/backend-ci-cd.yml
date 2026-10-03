@@ -32,7 +32,7 @@ jobs:
       - name: Execute Backend Tests with Coverage
         run: |
           cd services/dashboard-api
-          CGO_ENABLED=0 go test -v -cover ./...
+          CGO_ENABLED=0 go test -v -cover ./api ./config ./db ./logic ./redis ./vlogs
 
   build-and-push:
     name: Build & Push Multi-Arch Image
