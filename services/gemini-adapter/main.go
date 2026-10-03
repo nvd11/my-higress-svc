@@ -53,6 +53,25 @@ func main() {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery())
+	r.Use(gin.Logger())
+
+	r.NoRoute(func(c *gin.Context) {
+		log.Printf("⚠️ Incoming Unmatched Path: %s, Method: %s", c.Request.URL.Path, c.Request.Method)
+		if strings.Contains(c.Request.URL.Path, "chat/completions") {
+			handleChatCompletion(c, apiKey)
+			return
+		}
+		if strings.Contains(c.Request.URL.Path, "models") {
+			c.JSON(http.StatusOK, gin.H{
+				"object": "list",
+				"data": []gin.H{
+					{"id": "gemini-3.8-flash", "object": "model", "owned_by": "google"},
+				},
+			})
+			return
+		}
+		c.JSON(http.StatusNotFound, gin.H{"error": "route not found", "path": c.Request.URL.Path})
+	})
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "service": "gemini-adapter-sidecar"})
