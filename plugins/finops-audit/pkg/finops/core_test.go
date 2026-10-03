@@ -107,7 +107,6 @@ func TestVictoriaLogsJSONLineFormat(t *testing.T) {
 
 	rawStr := string(jsonBytes)
 
-	// 核心断言: 检查老系统 LogsQL 过滤必须的字段
 	if !strings.Contains(rawStr, `"_stream":"{env=\"prod\",service=\"litellm\",type=\"payload\"}"`) {
 		t.Errorf("missing exact _stream tag, got: %s", rawStr)
 	}
@@ -119,7 +118,7 @@ func TestVictoriaLogsJSONLineFormat(t *testing.T) {
 	}
 }
 
-// 5. [新增] 验证 Redis L2 抽屉热缓存的编解码与可还原性 (Base64 + Gzip 兼容性)
+// 5. 验证 Redis L2 抽屉热缓存的编解码与可还原性 (Base64 + Gzip 兼容性)
 func TestRedisPayloadCacheEncoding(t *testing.T) {
 	prompt := `[{"role": "user", "content": "What is WebAssembly?"}]`
 	response := `{"content": "WebAssembly is a binary instruction format..."}`
@@ -148,7 +147,6 @@ func TestRedisPayloadCacheEncoding(t *testing.T) {
 	redisVal := base64.StdEncoding.EncodeToString(buf.Bytes())
 
 	// 3. 验证老系统大屏抽屉的解压逻辑 (模拟 payload.py 读取端)
-	// 老系统读取逻辑: base64.b64decode -> gzip.decompress -> json.loads
 	decodedBytes, err := base64.StdEncoding.DecodeString(redisVal)
 	if err != nil {
 		t.Fatalf("base64.Decode failed: %v", err)
@@ -175,5 +173,37 @@ func TestRedisPayloadCacheEncoding(t *testing.T) {
 	}
 	if restoredMap["response"] != response {
 		t.Errorf("restored response mismatch: got %s, want %s", restoredMap["response"], response)
+	}
+}
+
+// 6. [新增] 验证 Virtual Key 鉴权与租户身份标记 (支持 Cindy 专属凭证)
+func TestResolveVirtualKey(t *testing.T) {
+	vkeys := map[string]string{
+		"sk-cindy-higress-20261003-888888": "cindy",
+		"sk-jayden-production-key":         "jayden",
+	}
+
+	// 1. 成功匹配 Cindy 专属 Key
+	alias, ok := ResolveVirtualKey("Bearer sk-cindy-higress-20261003-888888", vkeys)
+	if !ok || alias != "cindy" {
+		t.Errorf("expected cindy, got: %s (ok: %v)", alias, ok)
+	}
+
+	// 2. 成功匹配 Jayden Key
+	aliasJayden, okJayden := ResolveVirtualKey("Bearer sk-jayden-production-key", vkeys)
+	if !okJayden || aliasJayden != "jayden" {
+		t.Errorf("expected jayden, got: %s (ok: %v)", aliasJayden, okJayden)
+	}
+
+	// 3. 伪造或非法 Key 拒绝通过 (防止盗刷)
+	_, okFake := ResolveVirtualKey("Bearer sk-fake-key-123", vkeys)
+	if okFake {
+		t.Errorf("expected unauthorized for fake key")
+	}
+
+	// 4. 空配置时允许默认通行
+	aliasDef, okDef := ResolveVirtualKey("Bearer anything", nil)
+	if !okDef || aliasDef != "default" {
+		t.Errorf("expected default for empty vkeys config")
 	}
 }
