@@ -34,7 +34,7 @@ spec:
       # ========================================================================
       - id: gemini-official
         type: openai
-        serviceUrl: "http://higress-gemini-adapter.higress-system.svc.cluster.local:8080/v1"
+        serviceUrl: "http://higress-gemini-adapter.higress-system.svc.cluster.local:8080"
         apiTokens:
           - "internal-token-passed"
         modelMapping:
