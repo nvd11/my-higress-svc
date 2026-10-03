@@ -1,6 +1,6 @@
 module github.com/nvd11/my-higress-svc/services/dashboard-api
 
-go 1.24
+go 1.26
 
 require (
 	github.com/gin-gonic/gin v1.12.0
