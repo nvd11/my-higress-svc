@@ -32,23 +32,23 @@ func main() {
 	})
 
 	// 通用代理转发器: 无论前端发的是 /v1/chat/completions 还是 Google 原生的 /v1beta/models/...:streamGenerateContent
-	r.NoRoute(func(c *gin.Context) {
-		path := c.Request.URL.Path
-		log.Printf("📥 Ingesting request: %s %s", c.Request.Method, path)
-
-		// 1. 如果是 Google 原生协议生成请求 (包含 generateContent 或 streamGenerateContent)
-		if strings.Contains(path, "generateContent") {
-			handleGeminiNativeProxy(c, apiKey)
-			return
-		}
-
-		// 2. 如果是 OpenAI 补全协议 (/v1/chat/completions)
-		if strings.Contains(path, "chat/completions") {
+	// 显式捕获所有 POST 推理请求 (不管带不带版本前缀, 彻底绕开 NoRoute 限制)
+	r.POST("/*action", func(c *gin.Context) {
+		log.Printf("📥 Ingesting POST request: %s", c.Request.URL.Path)
+		if strings.Contains(c.Request.URL.Path, "chat/completions") {
 			handleOpenAIStyle(c, apiKey)
 			return
 		}
+		handleGeminiNativeProxy(c, apiKey)
+	})
 
-		// 3. 严格精确匹配模型列表接口，绝不能用模糊 Contains 误伤生成接口
+	r.NoRoute(func(c *gin.Context) {
+		log.Printf("⚠️ Incoming Unmatched Path: %s, Method: %s", c.Request.URL.Path, c.Request.Method)
+		if strings.Contains(c.Request.URL.Path, "generateContent") || c.Request.Method == "POST" {
+			handleGeminiNativeProxy(c, apiKey)
+			return
+		}
+		path := c.Request.URL.Path
 		if path == "/models" || path == "/v1/models" || path == "/v1beta/models" {
 			c.JSON(http.StatusOK, gin.H{
 				"object": "list",
@@ -58,8 +58,7 @@ func main() {
 			})
 			return
 		}
-
-		c.JSON(http.StatusNotFound, gin.H{"error": "route not found", "path": path})
+		c.JSON(http.StatusNotFound, gin.H{"error": "route not found", "path": c.Request.URL.Path})
 	})
 
 	log.Printf("🚀 Gemini Adapter Sidecar listening on port :%s", port)
