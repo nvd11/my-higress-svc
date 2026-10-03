@@ -8,12 +8,14 @@ import (
 
 // PluginConfig 插件全局配置 (从 WasmPlugin CRD defaultConfig 解析)
 type PluginConfig struct {
-	// VictoriaLogs HTTP 端点 (例如 http://10.0.1.227:9428/insert/jsonl)
+	// VictoriaLogs HTTP 端点 (例如 http://10.0.1.227:9428/insert/jsonline)
 	VictoriaLogsURL string `json:"victoria_logs_url"`
-	// Dashboard-API 内部写入端点 (例如 http://my-higress-dashboard.higress-system.svc:8000/api/v1/internal/audit-log)
+	// Dashboard-API 内部写入端点 (例如 http://my-higress-dashboard-backend.higress-system.svc:4000/api/v1/internal/audit-log)
 	DashboardAPIURL string `json:"dashboard_api_url"`
 	// 结算兜底汇率 (默认 7.2300)
 	DefaultFxRate float64 `json:"default_fx_rate"`
+	// Virtual Key 到 api_key_alias 的映射字典 (用于微秒级鉴权与身份识别)
+	VirtualKeys map[string]string `json:"virtual_keys"`
 }
 
 // AuditLogRecord 对应 MySQL llm_request_logs 表结构的完整实体 (100% 兼容旧系统)

@@ -41,6 +41,14 @@ func parseConfig(json gjson.Result, config *PluginConfig, log wrapper.Log) error
 	if config.DefaultFxRate <= 0 {
 		config.DefaultFxRate = 7.2300 // 严格按照 COMPATIBILITY.md 7.23 兜底
 	}
+
+	config.VirtualKeys = make(map[string]string)
+	if vkeys := json.Get("virtual_keys"); vkeys.Exists() && vkeys.IsObject() {
+		vkeys.ForEach(func(key, val gjson.Result) bool {
+			config.VirtualKeys[key.String()] = val.String()
+			return true
+		})
+	}
 	return nil
 }
 
@@ -53,8 +61,26 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig, log wrap
 	}
 	ctx.SetContext(ctxRequestID, reqID)
 
-	// 提取 Consumer 租户身份 (由前面的 key-auth / consumer 插件注入)
-	consumer, _ := proxywasm.GetHttpRequestHeader("x-mse-consumer")
+	// 1. 优先从 Authorization: Bearer <TOKEN> 匹配 VirtualKeys 字典
+	authHeader, _ := proxywasm.GetHttpRequestHeader("authorization")
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+	token = strings.TrimSpace(token)
+
+	consumer := ""
+	if token != "" && len(config.VirtualKeys) > 0 {
+		if alias, ok := config.VirtualKeys[token]; ok {
+			consumer = alias
+		} else {
+			// 如果配置了白名单密钥但未匹配上，拒绝未授权请求
+			_ = proxywasm.SendHttpResponse(401, [][2]string{{"Content-Type", "application/json"}}, []byte(`{"error":{"message":"Invalid Virtual Key","type":"invalid_request_error","code":"invalid_api_key"}}`))
+			return types.ActionPause
+		}
+	}
+
+	// 2. 兜底读取外部网关注入的标签
+	if consumer == "" {
+		consumer, _ = proxywasm.GetHttpRequestHeader("x-mse-consumer")
+	}
 	if consumer == "" {
 		consumer, _ = proxywasm.GetHttpRequestHeader("x-consumer")
 	}

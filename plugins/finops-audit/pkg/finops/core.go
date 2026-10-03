@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"strings"
 )
 
 // ModelPricing 单个模型每 1M Tokens 计价 (美金)
@@ -73,4 +74,22 @@ func CompressGzip(data []byte) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// ResolveVirtualKey 校验 Token 并解析出对应的租户标识 (api_key_alias)
+func ResolveVirtualKey(authHeader string, virtualKeys map[string]string) (alias string, authorized bool) {
+	if len(virtualKeys) == 0 {
+		return "default", true
+	}
+
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return "", false
+	}
+
+	if a, ok := virtualKeys[token]; ok {
+		return a, true
+	}
+	return "", false
 }
