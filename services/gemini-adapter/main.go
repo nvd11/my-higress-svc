@@ -118,10 +118,20 @@ func handleGeminiNativeProxy(c *gin.Context, defaultAPIKey string) {
 	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {
+		log.Printf("❌ Failed calling Google AI Studio: %v", err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("failed calling Google AI Studio: %v", err)})
 		return
 	}
 	defer resp.Body.Close()
+
+	log.Printf("✅ Google Upstream Status: %d, ContentType: %s", resp.StatusCode, resp.Header.Get("Content-Type"))
+
+	if resp.StatusCode >= 400 {
+		errBody, _ := io.ReadAll(resp.Body)
+		log.Printf("❌ Google Error Body: %s", string(errBody))
+		c.Data(resp.StatusCode, resp.Header.Get("Content-Type"), errBody)
+		return
+	}
 
 	for k, vv := range resp.Header {
 		for _, v := range vv {
