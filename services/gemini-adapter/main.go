@@ -149,8 +149,18 @@ func handleGeminiNativeProxy(c *gin.Context, defaultAPIKey string) {
 		n, rErr := resp.Body.Read(buf)
 		if n > 0 {
 			totalBytes += n
-			log.Printf("📦 Upstream Chunk (%d bytes): %s", n, string(buf[:n]))
-			_, _ = c.Writer.Write(buf[:n])
+			chunkStr := string(buf[:n])
+			log.Printf("📦 Upstream Chunk (%d bytes): %s", n, chunkStr)
+
+			// 拦截 Google 的 PROHIBITED_CONTENT / blockReason，避免 Higress 吐空 chunk 给客户端
+			if strings.Contains(chunkStr, "\"blockReason\"") && !strings.Contains(chunkStr, "\"candidates\"") {
+				log.Printf("⚠️ Detected upstream blockReason! Synthesizing graceful candidate error response...")
+				synthetic := "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"[Google AI Studio upstream safety filter blocked this request due to blockReason (e.g. repeated prompt / PROHIBITED_CONTENT). Please start a fresh topic or clear thread history.]\"}],\"role\": \"model\"},\"finishReason\": \"STOP\",\"index\": 0}]}\n\n"
+				_, _ = c.Writer.Write([]byte(synthetic))
+			} else {
+				_, _ = c.Writer.Write(buf[:n])
+			}
+
 			if hasFlusher {
 				flusher.Flush()
 			}
