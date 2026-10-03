@@ -144,9 +144,12 @@ func handleGeminiNativeProxy(c *gin.Context, defaultAPIKey string) {
 
 	flusher, hasFlusher := c.Writer.(http.Flusher)
 	buf := make([]byte, 4096)
+	totalBytes := 0
 	for {
 		n, rErr := resp.Body.Read(buf)
 		if n > 0 {
+			totalBytes += n
+			log.Printf("📦 Upstream Chunk (%d bytes): %s", n, string(buf[:n]))
 			_, _ = c.Writer.Write(buf[:n])
 			if hasFlusher {
 				flusher.Flush()
@@ -156,6 +159,7 @@ func handleGeminiNativeProxy(c *gin.Context, defaultAPIKey string) {
 			break
 		}
 	}
+	log.Printf("🏁 Stream finished. Total bytes streamed: %d", totalBytes)
 }
 
 // handleOpenAIStyle 接收标准的 OpenAI 请求，使用官方 Go SDK 驱动调用并返回合规格式
