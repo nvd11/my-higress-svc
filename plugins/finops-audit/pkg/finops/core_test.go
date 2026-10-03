@@ -180,6 +180,8 @@ func TestRedisPayloadCacheEncoding(t *testing.T) {
 func TestResolveVirtualKey(t *testing.T) {
 	vkeys := map[string]string{
 		"sk-cindy-higress-20261003-888888": "cindy",
+		"sk-yui-higress-20261003-777777":   "yui",
+		"sk-hebe-higress-20261003-999999":  "hebe",
 		"sk-jayden-production-key":         "jayden",
 	}
 
@@ -189,7 +191,19 @@ func TestResolveVirtualKey(t *testing.T) {
 		t.Errorf("expected cindy, got: %s (ok: %v)", alias, ok)
 	}
 
-	// 2. 成功匹配 Jayden Key
+	// 2. 成功匹配 Yui 专属 Key
+	aliasYui, okYui := ResolveVirtualKey("Bearer sk-yui-higress-20261003-777777", vkeys)
+	if !okYui || aliasYui != "yui" {
+		t.Errorf("expected yui, got: %s (ok: %v)", aliasYui, okYui)
+	}
+
+	// 3. 成功匹配 Hebe 专属 Key
+	aliasHebe, okHebe := ResolveVirtualKey("Bearer sk-hebe-higress-20261003-999999", vkeys)
+	if !okHebe || aliasHebe != "hebe" {
+		t.Errorf("expected hebe, got: %s (ok: %v)", aliasHebe, okHebe)
+	}
+
+	// 4. 成功匹配 Jayden Key
 	aliasJayden, okJayden := ResolveVirtualKey("Bearer sk-jayden-production-key", vkeys)
 	if !okJayden || aliasJayden != "jayden" {
 		t.Errorf("expected jayden, got: %s (ok: %v)", aliasJayden, okJayden)
