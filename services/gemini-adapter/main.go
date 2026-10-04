@@ -248,14 +248,86 @@ func cleanGeminiSchema(schema interface{}) interface{} {
 	}
 }
 
+// reportAuditLogAsync 异步向 dashboard-backend 上报审计与计量日志
+func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promptTokens, completionTokens int, latencyMs int, statusCode int, promptText, respText string, errText *string) {
+	backendURL := os.Getenv("AUDIT_BACKEND_URL")
+	if backendURL == "" {
+		backendURL = "http://higress-dashboard-backend.higress-system.svc:4000/api/v1/internal/audit-log"
+	}
+
+	go func() {
+		defer func() { _ = recover() }()
+
+		keyAlias := "unknown"
+		auth := strings.TrimPrefix(rawAuthHeader, "Bearer ")
+		auth = strings.TrimSpace(auth)
+		switch {
+		case strings.Contains(auth, "cindy"):
+			keyAlias = "cindy"
+		case strings.Contains(auth, "yui"):
+			keyAlias = "yui"
+		case strings.Contains(auth, "hebe"):
+			keyAlias = "hebe"
+		case strings.Contains(auth, "jayden"):
+			keyAlias = "jayden"
+		default:
+			if len(auth) > 8 {
+				keyAlias = auth[:8]
+			}
+		}
+
+		totalTokens := promptTokens + completionTokens
+		// Gemini 3.8 Flash 定价: Prompt $0.075 / 1M, Completion $0.30 / 1M
+		costUSD := (float64(promptTokens)*0.075 + float64(completionTokens)*0.30) / 1000000.0
+		fxRate := 7.2300
+		costCNY := costUSD * fxRate
+
+		payload := map[string]interface{}{
+			"id":                 reqID,
+			"request_id":         reqID,
+			"api_key_alias":      keyAlias,
+			"model_requested":    modelReq,
+			"model_used":         modelUsed,
+			"provider":           "google",
+			"provider_key_alias": "OPENAI_API_KEY_FREE_3",
+			"prompt_tokens":      promptTokens,
+			"completion_tokens":  completionTokens,
+			"reasoning_tokens":   0,
+			"total_tokens":       totalTokens,
+			"cost_usd":           costUSD,
+			"cost_cny":           costCNY,
+			"fx_rate":            fxRate,
+			"latency_ms":         latencyMs,
+			"status_code":        statusCode,
+			"error_msg":          errText,
+			"created_at":         time.Now().UTC(),
+			"prompt":             promptText,
+			"response":           respText,
+		}
+
+		b, _ := json.Marshal(payload)
+		client := &http.Client{Timeout: 3 * time.Second}
+		httpReq, err := http.NewRequest("POST", backendURL, bytes.NewReader(b))
+		if err == nil {
+			httpReq.Header.Set("Content-Type", "application/json")
+			resp, doErr := client.Do(httpReq)
+			if doErr == nil {
+				_ = resp.Body.Close()
+			}
+		}
+	}()
+}
+
 // -----------------------------------------------------------------------------
 // handleOpenAIStyle: 接收标准 OpenAI 格式，转译调用 Google AI Studio
 // -----------------------------------------------------------------------------
 
 func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
+	startTime := time.Now()
+	rawAuthHeader := c.GetHeader("Authorization")
 	key := defaultAPIKey
-	if auth := c.GetHeader("Authorization"); auth != "" {
-		token := strings.TrimPrefix(auth, "Bearer ")
+	if rawAuthHeader != "" {
+		token := strings.TrimPrefix(rawAuthHeader, "Bearer ")
 		token = strings.TrimSpace(token)
 		if strings.HasPrefix(token, "AIza") {
 			key = token
@@ -266,6 +338,13 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid json: %v", err)})
 		return
+	}
+
+	promptPreview := ""
+	if len(req.Messages) > 0 {
+		lastMsg := req.Messages[len(req.Messages)-1]
+		b, _ := json.Marshal(lastMsg.Content)
+		promptPreview = string(b)
 	}
 
 	// 构造 Google 请求
@@ -483,6 +562,9 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 		hasToolCalls := false
 		var sources []string
 		seenSources := make(map[string]bool)
+		fullResponseText := ""
+		promptTokens := 0
+		completionTokens := 0
 
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -542,6 +624,7 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 			}
 			for _, part := range cand.Content.Parts {
 				if part.Text != "" {
+					fullResponseText += part.Text
 					chunk := gin.H{
 						"id":      chatCmplID,
 						"object":  "chat.completion.chunk",
@@ -642,6 +725,8 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 
 				usage := gin.H{}
 				if gResp.UsageMetadata != nil {
+					promptTokens = gResp.UsageMetadata.PromptTokenCount
+					completionTokens = gResp.UsageMetadata.CandidatesTokenCount
 					usage = gin.H{
 						"prompt_tokens":     gResp.UsageMetadata.PromptTokenCount,
 						"completion_tokens": gResp.UsageMetadata.CandidatesTokenCount,
@@ -675,6 +760,10 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 		if flusher != nil {
 			flusher.Flush()
 		}
+
+		// 异步上报审计日志至 dashboard-backend
+		latency := int(time.Since(startTime).Milliseconds())
+		reportAuditLogAsync(chatCmplID, rawAuthHeader, model, realModel, promptTokens, completionTokens, latency, http.StatusOK, promptPreview, fullResponseText, nil)
 		return
 	}
 
@@ -794,6 +883,16 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 		},
 		"usage": usage,
 	})
+
+	// 异步上报审计日志至 dashboard-backend
+	pTokens := 0
+	cTokens := 0
+	if gResp.UsageMetadata != nil {
+		pTokens = gResp.UsageMetadata.PromptTokenCount
+		cTokens = gResp.UsageMetadata.CandidatesTokenCount
+	}
+	latency := int(time.Since(startTime).Milliseconds())
+	reportAuditLogAsync(chatCmplID, rawAuthHeader, model, realModel, pTokens, cTokens, latency, http.StatusOK, promptPreview, outContent, nil)
 }
 
 // -----------------------------------------------------------------------------
