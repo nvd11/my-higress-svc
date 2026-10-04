@@ -115,7 +115,12 @@ func RegisterInternalRoutes(rg *gin.RouterGroup, vlogsClient *vlogs.Client) {
 			}
 
 			// 2. 写入 Redis (3天热缓存)
-			_ = redis.SetPayloadCache(ctx, rec.RequestID, pObj, rObj)
+			rErr := redis.SetPayloadCache(ctx, rec.RequestID, pObj, rObj)
+			if rErr != nil {
+				log.Printf("❌ Failed setting payload cache in Redis for %s: %v", rec.RequestID, rErr)
+			} else {
+				log.Printf("✅ Cached payload in Redis for %s", rec.RequestID)
+			}
 
 			// 3. 写入 VictoriaLogs (自动分片 + Gzip)
 			if vlogsClient != nil {
