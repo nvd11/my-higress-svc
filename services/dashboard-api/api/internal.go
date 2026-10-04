@@ -63,6 +63,18 @@ func RegisterInternalRoutes(rg *gin.RouterGroup, vlogsClient *vlogs.Client) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
+			// 安全保护: 防止 id 超过列宽
+			dbID := rec.ID
+			if len(dbID) > 64 {
+				dbID = dbID[:64]
+			}
+			if dbID == "" {
+				dbID = rec.RequestID
+				if len(dbID) > 64 {
+					dbID = dbID[:64]
+				}
+			}
+
 			// 1. 写入 MySQL HeatWave (llm_request_logs)
 			if db.DB != nil {
 				insertSql := `
@@ -79,7 +91,7 @@ func RegisterInternalRoutes(rg *gin.RouterGroup, vlogsClient *vlogs.Client) {
 					)
 				`
 				res, err := db.DB.ExecContext(ctx, insertSql,
-					rec.ID, rec.RequestID, rec.APIKeyAlias, rec.ModelRequested, rec.ModelUsed,
+					dbID, rec.RequestID, rec.APIKeyAlias, rec.ModelRequested, rec.ModelUsed,
 					rec.Provider, rec.ProviderKeyAlias, rec.PromptTokens, rec.CompletionTokens,
 					rec.TotalTokens, rec.CostUSD, rec.CostCNY, rec.FxRate,
 					rec.LatencyMS, rec.StatusCode, rec.ErrorMsg, rec.CreatedAt,
