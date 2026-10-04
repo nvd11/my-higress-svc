@@ -497,12 +497,37 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 		return
 	}
 
-	promptPreview := ""
-	if len(req.Messages) > 0 {
-		lastMsg := req.Messages[len(req.Messages)-1]
-		b, _ := json.Marshal(lastMsg.Content)
-		promptPreview = string(b)
+	// 提取结构化的 user_prompt 与 system_prompt 供 Dashboard 完美透视展示
+	var userPrompt, systemPrompt string
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		m := req.Messages[i]
+		if m.Role == "user" && userPrompt == "" {
+			switch cv := m.Content.(type) {
+			case string:
+				userPrompt = cv
+			default:
+				cb, _ := json.Marshal(cv)
+				userPrompt = string(cb)
+			}
+		}
+		if m.Role == "system" && systemPrompt == "" {
+			switch cv := m.Content.(type) {
+			case string:
+				systemPrompt = cv
+			default:
+				cb, _ := json.Marshal(cv)
+				systemPrompt = string(cb)
+			}
+		}
 	}
+	promptMap := map[string]interface{}{
+		"user_prompt":   userPrompt,
+		"system_prompt": systemPrompt,
+		"messages":      req.Messages,
+		"tools":         req.Tools,
+	}
+	promptJSONBytes, _ := json.Marshal(promptMap)
+	structuredPrompt := string(promptJSONBytes)
 
 	// 构造 Google 请求
 	gReq := GoogleGenerateContentRequest{
@@ -733,6 +758,7 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 		scanner.Buffer(buf, 1024*1024)
 
 		hasToolCalls := false
+		var streamToolCalls []gin.H
 		var sources []string
 		seenSources := make(map[string]bool)
 		fullResponseText := ""
@@ -830,8 +856,17 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 
 					if part.ThoughtSignature != "" {
 						thoughtSigCache.Store(callID, part.ThoughtSignature)
-						thoughtSigCache.Store(part.FunctionCall.Name, part.ThoughtSignature)
 					}
+
+					tcObj := gin.H{
+						"id":   callID,
+						"type": "function",
+						"function": gin.H{
+							"name":      part.FunctionCall.Name,
+							"arguments": string(argsBytes),
+						},
+					}
+					streamToolCalls = append(streamToolCalls, tcObj)
 
 					chunk := gin.H{
 						"id":      chatCmplID,
@@ -936,7 +971,12 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 
 		// 异步上报审计日志至 dashboard-backend
 		latency := int(time.Since(startTime).Milliseconds())
-		reportAuditLogAsync(chatCmplID, rawAuthHeader, model, realModel, promptTokens, completionTokens, latency, http.StatusOK, promptPreview, fullResponseText, nil)
+		respMap := map[string]interface{}{
+			"reply":      fullResponseText,
+			"tool_calls": streamToolCalls,
+		}
+		respJSONBytes, _ := json.Marshal(respMap)
+		reportAuditLogAsync(chatCmplID, rawAuthHeader, model, realModel, promptTokens, completionTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
 		return
 	}
 
@@ -1065,7 +1105,12 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 		cTokens = gResp.UsageMetadata.CandidatesTokenCount
 	}
 	latency := int(time.Since(startTime).Milliseconds())
-	reportAuditLogAsync(chatCmplID, rawAuthHeader, model, realModel, pTokens, cTokens, latency, http.StatusOK, promptPreview, outContent, nil)
+	respMap := map[string]interface{}{
+		"reply":      outContent,
+		"tool_calls": outToolCalls,
+	}
+	respJSONBytes, _ := json.Marshal(respMap)
+	reportAuditLogAsync(chatCmplID, rawAuthHeader, model, realModel, pTokens, cTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
 }
 
 // stripThoughtSignaturePlaceholder 递归清洗客户端注入的非法伪造签名 (如 thought_signature_placeholder)
