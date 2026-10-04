@@ -261,8 +261,14 @@ func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promp
 		backendURL = "http://higress-dashboard-backend.higress-system.svc.cluster.local:4000/api/v1/internal/audit-log"
 	}
 
+	log.Printf("🚀 Invoked reportAuditLogAsync: reqID=%s, authHeader=%s, promptTokens=%d, compTokens=%d", reqID, rawAuthHeader, promptTokens, completionTokens)
+
 	go func() {
-		defer func() { _ = recover() }()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("❌ Panic in reportAuditLogAsync: %v", r)
+			}
+		}()
 
 		keyAlias := "unknown-higress"
 		auth := strings.TrimPrefix(rawAuthHeader, "Bearer ")
@@ -336,6 +342,13 @@ func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promp
 func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 	startTime := time.Now()
 	rawAuthHeader := c.GetHeader("Authorization")
+	if rawAuthHeader == "" {
+		rawAuthHeader = c.GetHeader("x-api-key")
+	}
+	if rawAuthHeader == "" {
+		rawAuthHeader = c.GetHeader("api-key")
+	}
+
 	key := defaultAPIKey
 	if rawAuthHeader != "" {
 		token := strings.TrimPrefix(rawAuthHeader, "Bearer ")
