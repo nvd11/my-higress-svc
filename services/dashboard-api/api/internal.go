@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"time"
 
@@ -67,12 +68,18 @@ func RegisterInternalRoutes(rg *gin.RouterGroup, vlogsClient *vlogs.Client) {
 						?, ?, ?, ?
 					)
 				`
-				_, _ = db.DB.ExecContext(ctx, insertSql,
+				res, err := db.DB.ExecContext(ctx, insertSql,
 					rec.ID, rec.RequestID, rec.APIKeyAlias, rec.ModelRequested, rec.ModelUsed,
 					rec.Provider, rec.ProviderKeyAlias, rec.PromptTokens, rec.CompletionTokens,
 					rec.ReasoningTokens, rec.TotalTokens, rec.CostUSD, rec.CostCNY, rec.FxRate,
 					rec.LatencyMS, rec.StatusCode, rec.ErrorMsg, rec.CreatedAt,
 				)
+				if err != nil {
+					log.Printf("❌ Failed executing insertSql in MySQL: %v", err)
+				} else {
+					affected, _ := res.RowsAffected()
+					log.Printf("✅ Inserted audit record %s into MySQL (rows affected: %d)", rec.RequestID, affected)
+				}
 			}
 
 			// 解析 Prompt 和 Response 对象
