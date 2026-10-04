@@ -575,8 +575,9 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 				}
 
 				if sig == "" {
-					// 兜底一个最小合法的 thoughtSignature (base64 dummy), 避免 Google 400 校验直接拒收
-					sig = "thought_signature_placeholder"
+					// Google 要求 thought_signature 为合法 Base64 编码的 bytes (TYPE_BYTES)
+					// 使用合法的 base64 "c2tpcF90aG91Z2h0X3NpZ25hdHVyZQ==" ("skip_thought_signature")
+					sig = "c2tpcF90aG91Z2h0X3NpZ25hdHVyZQ=="
 				}
 
 				parts = append(parts, GooglePart{
