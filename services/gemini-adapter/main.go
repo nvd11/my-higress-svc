@@ -217,20 +217,24 @@ func cleanGeminiSchema(schema interface{}) interface{} {
 	case map[string]interface{}:
 		cleaned := make(map[string]interface{})
 		for k, val := range v {
+			trimmedKey := strings.TrimSpace(k)
+			if trimmedKey == "" {
+				continue
+			}
 			// 过滤掉 Google 不识别的元关键字
-			if k == "$schema" || k == "$id" || k == "$defs" || k == "definitions" || k == "title" {
+			if trimmedKey == "$schema" || trimmedKey == "$id" || trimmedKey == "$defs" || trimmedKey == "definitions" || trimmedKey == "title" || trimmedKey == "additionalProperties" || trimmedKey == "default" {
 				continue
 			}
 			// 将 exclusiveMinimum/exclusiveMaximum 转为 Google 支持的 minimum/maximum
-			if k == "exclusiveMinimum" {
+			if trimmedKey == "exclusiveMinimum" {
 				cleaned["minimum"] = val
 				continue
 			}
-			if k == "exclusiveMaximum" {
+			if trimmedKey == "exclusiveMaximum" {
 				cleaned["maximum"] = val
 				continue
 			}
-			cleaned[k] = cleanGeminiSchema(val)
+			cleaned[trimmedKey] = cleanGeminiSchema(val)
 		}
 		return cleaned
 	case []interface{}:
@@ -428,6 +432,7 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 	}
 
 	gReqBytes, _ := json.Marshal(gReq)
+	log.Printf("👉 Generated Google Payload Size: %d, Content: %s", len(gReqBytes), string(gReqBytes))
 
 	action := "generateContent"
 	extraQuery := ""
