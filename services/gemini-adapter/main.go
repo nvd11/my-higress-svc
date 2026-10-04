@@ -159,8 +159,8 @@ type GoogleFunctionResponse struct {
 }
 
 type GoogleTool struct {
-	FunctionDeclarations []GoogleFuncDecl       `json:"function_declarations,omitempty"`
-	GoogleSearch         map[string]interface{} `json:"googleSearch,omitempty"`
+	FunctionDeclarations []GoogleFuncDecl `json:"function_declarations,omitempty"`
+	GoogleSearch         *struct{}        `json:"googleSearch,omitempty"`
 }
 
 type GoogleFuncDecl struct {
@@ -388,7 +388,7 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 	}
 
 	if enableSearch {
-		gReq.Tools = append(gReq.Tools, GoogleTool{GoogleSearch: map[string]interface{}{}})
+		gReq.Tools = append(gReq.Tools, GoogleTool{GoogleSearch: &struct{}{}})
 		if len(req.Tools) > 0 {
 			gReq.ToolConfig = &GoogleToolConfig{IncludeServerSideToolInvocations: true}
 		}
