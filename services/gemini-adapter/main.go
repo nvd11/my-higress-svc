@@ -258,21 +258,21 @@ func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promp
 	go func() {
 		defer func() { _ = recover() }()
 
-		keyAlias := "unknown"
+		keyAlias := "unknown-higress"
 		auth := strings.TrimPrefix(rawAuthHeader, "Bearer ")
 		auth = strings.TrimSpace(auth)
 		switch {
 		case strings.Contains(auth, "cindy"):
-			keyAlias = "cindy"
+			keyAlias = "cindy-higress"
 		case strings.Contains(auth, "yui"):
-			keyAlias = "yui"
+			keyAlias = "yui-higress"
 		case strings.Contains(auth, "hebe"):
-			keyAlias = "hebe"
+			keyAlias = "hebe-higress"
 		case strings.Contains(auth, "jayden"):
-			keyAlias = "jayden"
+			keyAlias = "jayden-higress"
 		default:
 			if len(auth) > 8 {
-				keyAlias = auth[:8]
+				keyAlias = auth[:8] + "-higress"
 			}
 		}
 
@@ -288,7 +288,7 @@ func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promp
 			"api_key_alias":      keyAlias,
 			"model_requested":    modelReq,
 			"model_used":         modelUsed,
-			"provider":           "google",
+			"provider":           "higress-gemini",
 			"provider_key_alias": "OPENAI_API_KEY_FREE_3",
 			"prompt_tokens":      promptTokens,
 			"completion_tokens":  completionTokens,
