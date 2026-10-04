@@ -574,6 +574,11 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 					}
 				}
 
+				if sig == "" {
+					// 兜底一个最小合法的 thoughtSignature (base64 dummy), 避免 Google 400 校验直接拒收
+					sig = "thought_signature_placeholder"
+				}
+
 				parts = append(parts, GooglePart{
 					ThoughtSignature: sig,
 					FunctionCall: &GoogleFunctionCall{
