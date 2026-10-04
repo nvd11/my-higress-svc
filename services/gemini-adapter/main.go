@@ -483,12 +483,22 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 	}
 
 	key := defaultAPIKey
+	if key == "" {
+		key = os.Getenv("GEMINI_API_KEY")
+	}
 	if rawAuthHeader != "" {
 		token := strings.TrimPrefix(rawAuthHeader, "Bearer ")
 		token = strings.TrimSpace(token)
 		if strings.HasPrefix(token, "AIza") {
 			key = token
 		}
+	}
+	if key == "" {
+		log.Printf("❌ Critical: GEMINI_API_KEY is not configured or empty")
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "gemini-adapter configuration error: GEMINI_API_KEY is empty",
+		})
+		return
 	}
 
 	var req OpenAIChatRequest
@@ -1144,8 +1154,18 @@ func stripThoughtSignaturePlaceholder(v interface{}) interface{} {
 
 func handleGeminiNativeProxy(c *gin.Context, defaultAPIKey string) {
 	key := defaultAPIKey
+	if key == "" {
+		key = os.Getenv("GEMINI_API_KEY")
+	}
 	if token := c.GetHeader("x-goog-api-key"); token != "" && strings.HasPrefix(token, "AIza") {
 		key = token
+	}
+	if key == "" {
+		log.Printf("❌ Critical: GEMINI_API_KEY is not configured or empty")
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "gemini-adapter configuration error: GEMINI_API_KEY is empty",
+		})
+		return
 	}
 
 	rawBody, err := io.ReadAll(c.Request.Body)
