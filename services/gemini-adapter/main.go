@@ -72,6 +72,7 @@ func handleModels(c *gin.Context) {
 		"object": "list",
 		"data": []gin.H{
 			{"id": "gemini-3.8-flash", "object": "model", "owned_by": "google"},
+			{"id": "gemini-3.8-flash-search", "object": "model", "owned_by": "google"},
 			{"id": "gemini-3.8-backup", "object": "model", "owned_by": "google"},
 		},
 	})
@@ -123,10 +124,15 @@ type OpenAIFunctionCallDesc struct {
 
 // Google 结构体
 type GoogleGenerateContentRequest struct {
-	Contents          []GoogleContent `json:"contents"`
-	SystemInstruction *GoogleContent  `json:"system_instruction,omitempty"`
-	Tools             []GoogleTool    `json:"tools,omitempty"`
-	SafetySettings    []GoogleSafety  `json:"safetySettings,omitempty"`
+	Contents          []GoogleContent    `json:"contents"`
+	SystemInstruction *GoogleContent     `json:"system_instruction,omitempty"`
+	Tools             []GoogleTool       `json:"tools,omitempty"`
+	ToolConfig        *GoogleToolConfig  `json:"tool_config,omitempty"`
+	SafetySettings    []GoogleSafety     `json:"safetySettings,omitempty"`
+}
+
+type GoogleToolConfig struct {
+	IncludeServerSideToolInvocations bool `json:"include_server_side_tool_invocations"`
 }
 
 type GoogleContent struct {
@@ -153,7 +159,8 @@ type GoogleFunctionResponse struct {
 }
 
 type GoogleTool struct {
-	FunctionDeclarations []GoogleFuncDecl `json:"function_declarations,omitempty"`
+	FunctionDeclarations []GoogleFuncDecl       `json:"function_declarations,omitempty"`
+	GoogleSearch         map[string]interface{} `json:"googleSearch,omitempty"`
 }
 
 type GoogleFuncDecl struct {
@@ -174,9 +181,24 @@ type GoogleGenerateContentResponse struct {
 }
 
 type GoogleCandidate struct {
-	Content      GoogleContent `json:"content"`
-	FinishReason string        `json:"finishReason,omitempty"`
-	Index        int           `json:"index"`
+	Content           GoogleContent      `json:"content"`
+	FinishReason      string             `json:"finishReason,omitempty"`
+	Index             int                `json:"index"`
+	GroundingMetadata *GroundingMetadata `json:"groundingMetadata,omitempty"`
+}
+
+type GroundingMetadata struct {
+	WebSearchQueries []string         `json:"webSearchQueries,omitempty"`
+	GroundingChunks  []GroundingChunk `json:"groundingChunks,omitempty"`
+}
+
+type GroundingChunk struct {
+	Web *GroundingWeb `json:"web,omitempty"`
+}
+
+type GroundingWeb struct {
+	URI   string `json:"uri,omitempty"`
+	Title string `json:"title,omitempty"`
 }
 
 type GoogleFeedback struct {
@@ -334,6 +356,20 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 		}
 	}
 
+	// 判断是否启用 Google 原生 Search Grounding (联网搜索增强)
+	model := req.Model
+	if model == "" {
+		model = "gemini-3.8-flash"
+	}
+	enableSearch := strings.HasSuffix(model, "-search") || strings.HasSuffix(model, ":search")
+	realModel := model
+	if enableSearch {
+		realModel = strings.TrimSuffix(strings.TrimSuffix(model, "-search"), ":search")
+	}
+	if realModel == "" {
+		realModel = "gemini-3.8-flash"
+	}
+
 	// 转换 Tools
 	if len(req.Tools) > 0 {
 		var decls []GoogleFuncDecl
@@ -347,16 +383,18 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 			}
 		}
 		if len(decls) > 0 {
-			gReq.Tools = []GoogleTool{{FunctionDeclarations: decls}}
+			gReq.Tools = append(gReq.Tools, GoogleTool{FunctionDeclarations: decls})
+		}
+	}
+
+	if enableSearch {
+		gReq.Tools = append(gReq.Tools, GoogleTool{GoogleSearch: map[string]interface{}{}})
+		if len(req.Tools) > 0 {
+			gReq.ToolConfig = &GoogleToolConfig{IncludeServerSideToolInvocations: true}
 		}
 	}
 
 	gReqBytes, _ := json.Marshal(gReq)
-
-	model := req.Model
-	if model == "" {
-		model = "gemini-3.8-flash"
-	}
 
 	action := "generateContent"
 	extraQuery := ""
@@ -365,8 +403,8 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 		extraQuery = "&alt=sse"
 	}
 
-	upstreamURL := fmt.Sprintf("https://generativelanguage.googleapis.com/v1alpha/models/%s:%s?key=%s%s", model, action, key, extraQuery)
-	log.Printf("🚀 Dispatching OpenAI to Google: URL=%s (stream=%v, tools=%d)", upstreamURL, req.Stream, len(req.Tools))
+	upstreamURL := fmt.Sprintf("https://generativelanguage.googleapis.com/v1alpha/models/%s:%s?key=%s%s", realModel, action, key, extraQuery)
+	log.Printf("🚀 Dispatching OpenAI to Google: URL=%s (stream=%v, search=%v, client_tools=%d)", upstreamURL, req.Stream, enableSearch, len(req.Tools))
 
 	httpReq, err := http.NewRequestWithContext(c.Request.Context(), "POST", upstreamURL, bytes.NewReader(gReqBytes))
 	if err != nil {
@@ -405,6 +443,8 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 		scanner.Buffer(buf, 1024*1024)
 
 		hasToolCalls := false
+		var sources []string
+		seenSources := make(map[string]bool)
 
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -447,6 +487,21 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 			}
 
 			cand := gResp.Candidates[0]
+			if cand.GroundingMetadata != nil {
+				for _, gc := range cand.GroundingMetadata.GroundingChunks {
+					if gc.Web != nil && gc.Web.URI != "" {
+						title := gc.Web.Title
+						if title == "" {
+							title = gc.Web.URI
+						}
+						key := gc.Web.URI
+						if !seenSources[key] {
+							seenSources[key] = true
+							sources = append(sources, fmt.Sprintf("- [%s](%s)", title, gc.Web.URI))
+						}
+					}
+				}
+			}
 			for _, part := range cand.Content.Parts {
 				if part.Text != "" {
 					chunk := gin.H{
@@ -518,6 +573,30 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 			}
 
 			if cand.FinishReason != "" {
+				// 若存在联网搜索引用的信源，且不是纯工具调用，将信源优雅追加在末尾
+				if len(sources) > 0 && !hasToolCalls {
+					sourceBlock := "\n\n🌐 **网络参考信源**:\n" + strings.Join(sources, "\n")
+					sourceChunk := gin.H{
+						"id":      chatCmplID,
+						"object":  "chat.completion.chunk",
+						"created": created,
+						"model":   model,
+						"choices": []gin.H{
+							{
+								"index":         0,
+								"delta":         gin.H{"content": sourceBlock},
+								"finish_reason": nil,
+							},
+						},
+					}
+					chunkBytes, _ := json.Marshal(sourceChunk)
+					_, _ = c.Writer.Write([]byte(fmt.Sprintf("data: %s\n\n", string(chunkBytes))))
+					if flusher != nil {
+						flusher.Flush()
+					}
+					sources = nil // 仅发一次
+				}
+
 				finishReason := "stop"
 				if hasToolCalls {
 					finishReason = "tool_calls"
@@ -624,6 +703,26 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 	finishReason := "stop"
 	if len(outToolCalls) > 0 {
 		finishReason = "tool_calls"
+	}
+
+	if cand.GroundingMetadata != nil && len(outToolCalls) == 0 {
+		var sources []string
+		seen := make(map[string]bool)
+		for _, gc := range cand.GroundingMetadata.GroundingChunks {
+			if gc.Web != nil && gc.Web.URI != "" {
+				title := gc.Web.Title
+				if title == "" {
+					title = gc.Web.URI
+				}
+				if !seen[gc.Web.URI] {
+					seen[gc.Web.URI] = true
+					sources = append(sources, fmt.Sprintf("- [%s](%s)", title, gc.Web.URI))
+				}
+			}
+		}
+		if len(sources) > 0 {
+			outContent += "\n\n🌐 **网络参考信源**:\n" + strings.Join(sources, "\n")
+		}
 	}
 
 	msgObj := gin.H{"role": "assistant"}
