@@ -318,7 +318,7 @@ func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promp
 		}
 
 		b, _ := json.Marshal(payload)
-		client := &http.Client{Timeout: 5 * time.Second}
+		client := &http.Client{Timeout: 10 * time.Second}
 		httpReq, err := http.NewRequest("POST", backendURL, bytes.NewReader(b))
 		if err != nil {
 			log.Printf("❌ Failed building audit request: %v", err)
