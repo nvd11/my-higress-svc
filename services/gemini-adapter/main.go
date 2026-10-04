@@ -217,6 +217,139 @@ type GoogleUsage struct {
 	TotalTokenCount      int `json:"totalTokenCount"`
 }
 
+// sanitizeGoogleTurns 解决 Google Gemini 原生对话时序强校验限制:
+// "Please ensure that function call turn comes immediately after a user turn or after a function response turn."
+// 规则剖析:
+// 1. 任何带有 functionCall 的 model turn，紧随其后的必须是包含对应 functionResponse 的 user turn。
+// 2. 任何包含 functionResponse 的 user turn，前面必须紧邻着发出 functionCall 的 model turn。
+// 3. 严格交替: 连续相同的 role (user 连 user, 或 model 连 model) 进行 Parts 合并，绝不产生非法同角色切块。
+// 4. 当因为 Compaction 或截断导致出现孤立的 functionCall (缺失后续 response) 时，自动注入一个合法的空/成功 functionResponse。
+// 5. 当出现孤立的 functionResponse (前文被截断缺失 call) 时，自动平滑丢弃该孤立 response 或转为纯文本，防止 Google 400 拒收。
+func sanitizeGoogleTurns(contents []GoogleContent) []GoogleContent {
+	if len(contents) == 0 {
+		return contents
+	}
+
+	// 步骤一：合并相邻相同 Role 的 Content，确保 Role 严格交替
+	var merged []GoogleContent
+	for _, c := range contents {
+		if len(c.Parts) == 0 {
+			continue
+		}
+		if len(merged) > 0 && merged[len(merged)-1].Role == c.Role {
+			merged[len(merged)-1].Parts = append(merged[len(merged)-1].Parts, c.Parts...)
+		} else {
+			merged = append(merged, c)
+		}
+	}
+
+	// 步骤二：修复 FunctionCall 与 FunctionResponse 的成对时序与合法性
+	var sanitized []GoogleContent
+	for i := 0; i < len(merged); i++ {
+		current := merged[i]
+
+		// 检查是否有 FunctionResponse
+		hasFuncResp := false
+		for _, p := range current.Parts {
+			if p.FunctionResponse != nil {
+				hasFuncResp = true
+				break
+			}
+		}
+
+		if hasFuncResp {
+			// Google 要求: FunctionResponse 必须紧接在包含 FunctionCall 的 model turn 之后
+			// 检查前一个 turn 是否包含匹配的 FunctionCall
+			prevHasFuncCall := false
+			if len(sanitized) > 0 && sanitized[len(sanitized)-1].Role == "model" {
+				for _, p := range sanitized[len(sanitized)-1].Parts {
+					if p.FunctionCall != nil {
+						prevHasFuncCall = true
+						break
+					}
+				}
+			}
+
+			if !prevHasFuncCall {
+				// 前置缺失 FunctionCall (典型 Compaction 裁剪破损场景)
+				// 将无法对应的 FunctionResponse 转译为纯文本 user 说明，避免触发 Google 400 严格校验
+				var newParts []GooglePart
+				for _, p := range current.Parts {
+					if p.FunctionResponse != nil {
+						respBytes, _ := json.Marshal(p.FunctionResponse.Response)
+						newParts = append(newParts, GooglePart{
+							Text: fmt.Sprintf("[Previous tool execution result for %s]: %s", p.FunctionResponse.Name, string(respBytes)),
+						})
+					} else {
+						newParts = append(newParts, p)
+					}
+				}
+				current.Parts = newParts
+			}
+		}
+
+		// 检查当前 turn 是否有 FunctionCall
+		var funcCalls []*GoogleFunctionCall
+		for _, p := range current.Parts {
+			if p.FunctionCall != nil {
+				funcCalls = append(funcCalls, p.FunctionCall)
+			}
+		}
+
+		sanitized = append(sanitized, current)
+
+		// 如果当前 model turn 包含了 FunctionCall，Google 强制规定紧接着必须是 user turn 并且包含 FunctionResponse
+		if len(funcCalls) > 0 && current.Role == "model" {
+			// 检查下一个 turn 是否是 user 并且提供了对应的 FunctionResponse
+			nextHasFuncResp := false
+			if i+1 < len(merged) && merged[i+1].Role == "user" {
+				for _, p := range merged[i+1].Parts {
+					if p.FunctionResponse != nil {
+						nextHasFuncResp = true
+						break
+					}
+				}
+			}
+
+			if !nextHasFuncResp {
+				// 发生孤立 FunctionCall (Compaction 或请求末尾被截断，缺失 tool response)
+				// 自动注入合成的 user function response，满足 Google 协议的闭环校验要求
+				var syntheticParts []GooglePart
+				for _, fc := range funcCalls {
+					syntheticParts = append(syntheticParts, GooglePart{
+						FunctionResponse: &GoogleFunctionResponse{
+							Name: fc.Name,
+							Response: map[string]interface{}{
+								"status": "success",
+								"output": "[Auto-generated placeholder response for truncated compaction turn]",
+							},
+						},
+					})
+				}
+				sanitized = append(sanitized, GoogleContent{
+					Role:  "user",
+					Parts: syntheticParts,
+				})
+			}
+		}
+	}
+
+	// 步骤三：再次确保没有连续相同的 role（比如注入合成 user 后紧跟下一个 user）
+	var finalContents []GoogleContent
+	for _, c := range sanitized {
+		if len(c.Parts) == 0 {
+			continue
+		}
+		if len(finalContents) > 0 && finalContents[len(finalContents)-1].Role == c.Role {
+			finalContents[len(finalContents)-1].Parts = append(finalContents[len(finalContents)-1].Parts, c.Parts...)
+		} else {
+			finalContents = append(finalContents, c)
+		}
+	}
+
+	return finalContents
+}
+
 // cleanGeminiSchema 递归净化 JSON Schema，剔除 Google Gemini 不支持的元字段 ($schema, exclusiveMinimum 等)
 func cleanGeminiSchema(schema interface{}) interface{} {
 	switch v := schema.(type) {
@@ -495,6 +628,10 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 			continue
 		}
 	}
+
+	// 🎯 核心消息流净化与修复 (Sanitize turns for Google Gemini API):
+	// 彻底解决: "Please ensure that function call turn comes immediately after a user turn or after a function response turn."
+	gReq.Contents = sanitizeGoogleTurns(gReq.Contents)
 
 	// 判断是否启用 Google 原生 Search Grounding (联网搜索增强)
 	model := req.Model
