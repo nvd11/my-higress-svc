@@ -574,20 +574,28 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 					}
 				}
 
+				// 🎯 处理 thoughtSignature 与 Google 3.8 校验:
+				// Google 对历史 tool_call 的 thought_signature 有服务端加密验签 (HMAC),
+				// 伪造/占位符会直接触发 "Corrupted thought signature."
+				// 若由于历史压缩/客户端未透传导致没有真实 thought_signature，
+				// 此时绝对不能发送伪造签名，且如果直接发 functionCall 会被 Google 报错；
+				// 最佳做法：如果无法找到真实 thoughtSignature，将历史的 tool_call 转译为纯文本 assistant 描述，
+				// 避免触发 Google 的严格签名检验与 functionCall 校验，确保 Compaction 顺滑通过！
 				if sig == "" {
-					// Google 要求 thought_signature 为合法 Base64 编码的 bytes (TYPE_BYTES)
-					// 使用合法的 base64 "c2tpcF90aG91Z2h0X3NpZ25hdHVyZQ==" ("skip_thought_signature")
-					sig = "c2tpcF90aG91Z2h0X3NpZ25hdHVyZQ=="
+					argsStr := tc.Function.Arguments
+					parts = append(parts, GooglePart{
+						Text: fmt.Sprintf("[Assistant invoked tool %s with args: %s]", tc.Function.Name, argsStr),
+					})
+				} else {
+					parts = append(parts, GooglePart{
+						ThoughtSignature: sig,
+						FunctionCall: &GoogleFunctionCall{
+							Name: tc.Function.Name,
+							Args: args,
+							ID:   tc.ID,
+						},
+					})
 				}
-
-				parts = append(parts, GooglePart{
-					ThoughtSignature: sig,
-					FunctionCall: &GoogleFunctionCall{
-						Name: tc.Function.Name,
-						Args: args,
-						ID:   tc.ID,
-					},
-				})
 			}
 			if len(parts) > 0 {
 				gReq.Contents = append(gReq.Contents, GoogleContent{
