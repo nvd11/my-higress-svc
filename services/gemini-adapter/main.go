@@ -61,7 +61,13 @@ func main() {
 		c.JSON(http.StatusNotFound, gin.H{"error": "route not found", "path": c.Request.URL.Path})
 	})
 
-	log.Printf("🚀 Gemini Adapter Sidecar listening on port :%s", port)
+	log.Printf("🚀 Gemini Adapter Sidecar listening on port :%s (Audit Backend: %s)", port, func() string {
+		u := os.Getenv("AUDIT_BACKEND_URL")
+		if u == "" {
+			return "http://higress-dashboard-backend.higress-system.svc.cluster.local:4000/api/v1/internal/audit-log"
+		}
+		return u
+	}())
 	if err := r.Run(":" + port); err != nil {
 		log.Fatalf("failed starting adapter: %v", err)
 	}
@@ -306,14 +312,19 @@ func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promp
 		}
 
 		b, _ := json.Marshal(payload)
-		client := &http.Client{Timeout: 3 * time.Second}
+		client := &http.Client{Timeout: 5 * time.Second}
 		httpReq, err := http.NewRequest("POST", backendURL, bytes.NewReader(b))
-		if err == nil {
-			httpReq.Header.Set("Content-Type", "application/json")
-			resp, doErr := client.Do(httpReq)
-			if doErr == nil {
-				_ = resp.Body.Close()
-			}
+		if err != nil {
+			log.Printf("❌ Failed building audit request: %v", err)
+			return
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		resp, doErr := client.Do(httpReq)
+		if doErr != nil {
+			log.Printf("❌ Failed sending audit log to %s: %v", backendURL, doErr)
+		} else {
+			log.Printf("📊 Successfully reported audit log to %s (status=%d, reqID=%s, key=%s)", backendURL, resp.StatusCode, reqID, keyAlias)
+			_ = resp.Body.Close()
 		}
 	}()
 }
