@@ -211,6 +211,39 @@ type GoogleUsage struct {
 	TotalTokenCount      int `json:"totalTokenCount"`
 }
 
+// cleanGeminiSchema 递归净化 JSON Schema，剔除 Google Gemini 不支持的元字段 ($schema, exclusiveMinimum 等)
+func cleanGeminiSchema(schema interface{}) interface{} {
+	switch v := schema.(type) {
+	case map[string]interface{}:
+		cleaned := make(map[string]interface{})
+		for k, val := range v {
+			// 过滤掉 Google 不识别的元关键字
+			if k == "$schema" || k == "$id" || k == "$defs" || k == "definitions" || k == "title" {
+				continue
+			}
+			// 将 exclusiveMinimum/exclusiveMaximum 转为 Google 支持的 minimum/maximum
+			if k == "exclusiveMinimum" {
+				cleaned["minimum"] = val
+				continue
+			}
+			if k == "exclusiveMaximum" {
+				cleaned["maximum"] = val
+				continue
+			}
+			cleaned[k] = cleanGeminiSchema(val)
+		}
+		return cleaned
+	case []interface{}:
+		cleanedList := make([]interface{}, len(v))
+		for i, item := range v {
+			cleanedList[i] = cleanGeminiSchema(item)
+		}
+		return cleanedList
+	default:
+		return v
+	}
+}
+
 // -----------------------------------------------------------------------------
 // handleOpenAIStyle: 接收标准 OpenAI 格式，转译调用 Google AI Studio
 // -----------------------------------------------------------------------------
@@ -378,7 +411,7 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 				decls = append(decls, GoogleFuncDecl{
 					Name:        t.Function.Name,
 					Description: t.Function.Description,
-					Parameters:  t.Function.Parameters,
+					Parameters:  cleanGeminiSchema(t.Function.Parameters),
 				})
 			}
 		}
