@@ -252,7 +252,7 @@ func cleanGeminiSchema(schema interface{}) interface{} {
 func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promptTokens, completionTokens int, latencyMs int, statusCode int, promptText, respText string, errText *string) {
 	backendURL := os.Getenv("AUDIT_BACKEND_URL")
 	if backendURL == "" {
-		backendURL = "http://higress-dashboard-backend.higress-system.svc:4000/api/v1/internal/audit-log"
+		backendURL = "http://higress-dashboard-backend.higress-system.svc.cluster.local:4000/api/v1/internal/audit-log"
 	}
 
 	go func() {
