@@ -407,7 +407,7 @@ func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promp
 		auth := strings.TrimPrefix(rawAuthHeader, "Bearer ")
 		auth = strings.TrimSpace(auth)
 		switch {
-		case strings.Contains(auth, "cindy"):
+		case strings.Contains(auth, "cindy") || strings.HasPrefix(auth, "sk-cmlWk"):
 			keyAlias = "cindy-higress"
 		case strings.Contains(auth, "yui"):
 			keyAlias = "yui-higress"
