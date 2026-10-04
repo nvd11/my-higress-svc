@@ -568,19 +568,17 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 						sig = v.(string)
 					}
 				}
-				if sig == "" && tc.Function.Name != "" {
-					if v, ok := thoughtSigCache.Load(tc.Function.Name); ok {
-						sig = v.(string)
-					}
+				// 丢弃占位符与非法短签名，防止 Base64 崩溃与 Corrupted 报错
+				if strings.Contains(sig, "placeholder") || len(sig) < 20 {
+					sig = ""
 				}
 
 				// 🎯 处理 thoughtSignature 与 Google 3.8 校验:
 				// Google 对历史 tool_call 的 thought_signature 有服务端加密验签 (HMAC),
-				// 伪造/占位符会直接触发 "Corrupted thought signature."
-				// 若由于历史压缩/客户端未透传导致没有真实 thought_signature，
-				// 此时绝对不能发送伪造签名，且如果直接发 functionCall 会被 Google 报错；
-				// 最佳做法：如果无法找到真实 thoughtSignature，将历史的 tool_call 转译为纯文本 assistant 描述，
-				// 避免触发 Google 的严格签名检验与 functionCall 校验，确保 Compaction 顺滑通过！
+				// 伪造/串用占位符会直接触发 "Corrupted thought signature."
+				// 若由于历史压缩/客户端未透传导致没有该 callID 的真实精确签名，
+				// 最佳做法：将该历史 tool_call 转译为纯文本 assistant 描述，
+				// Google 100% 当作正常对话历史接收，完全免除验签，确保会话永远平稳！
 				if sig == "" {
 					argsStr := tc.Function.Arguments
 					parts = append(parts, GooglePart{
@@ -1070,6 +1068,31 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 	reportAuditLogAsync(chatCmplID, rawAuthHeader, model, realModel, pTokens, cTokens, latency, http.StatusOK, promptPreview, outContent, nil)
 }
 
+// stripThoughtSignaturePlaceholder 递归清洗客户端注入的非法伪造签名 (如 thought_signature_placeholder)
+func stripThoughtSignaturePlaceholder(v interface{}) interface{} {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		cleaned := make(map[string]interface{})
+		for k, item := range val {
+			if k == "thought_signature" || k == "thoughtSignature" {
+				if s, ok := item.(string); ok && (strings.Contains(s, "placeholder") || len(s) < 20) {
+					continue // 丢弃非法占位符
+				}
+			}
+			cleaned[k] = stripThoughtSignaturePlaceholder(item)
+		}
+		return cleaned
+	case []interface{}:
+		cleanedList := make([]interface{}, len(val))
+		for i, item := range val {
+			cleanedList[i] = stripThoughtSignaturePlaceholder(item)
+		}
+		return cleanedList
+	default:
+		return v
+	}
+}
+
 // -----------------------------------------------------------------------------
 // handleGeminiNativeProxy: 纯透传 Google 原生请求 (兼容器)
 // -----------------------------------------------------------------------------
@@ -1095,7 +1118,9 @@ func handleGeminiNativeProxy(c *gin.Context, defaultAPIKey string) {
 			{"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
 			{"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"},
 		}
-		rawBody, _ = json.Marshal(bodyMap)
+		// 递归剥离占位符
+		cleanedBody := stripThoughtSignaturePlaceholder(bodyMap)
+		rawBody, _ = json.Marshal(cleanedBody)
 	}
 
 	upstreamPath := c.Request.URL.Path
