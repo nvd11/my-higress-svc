@@ -22,10 +22,11 @@ func RegisterHealthRoutes(r *gin.Engine) {
 		dbErr := db.CheckHealth(ctx)
 		redisErr := redis.CheckHealth(ctx)
 
-		if dbErr != nil || redisErr != nil {
+		// 核心真理: MySQL 为主存储 (核心强依赖), Redis 仅作为 L2 辅助缓存 (非阻塞降级)
+		if dbErr != nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"status": "unhealthy",
-				"mysql":  dbErr == nil,
+				"mysql":  false,
 				"redis":  redisErr == nil,
 			})
 			return
@@ -34,7 +35,7 @@ func RegisterHealthRoutes(r *gin.Engine) {
 		c.JSON(http.StatusOK, gin.H{
 			"status": "healthy",
 			"mysql":  true,
-			"redis":  true,
+			"redis":  redisErr == nil,
 		})
 	})
 }
