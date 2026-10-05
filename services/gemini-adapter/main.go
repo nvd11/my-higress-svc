@@ -27,6 +27,7 @@ func main() {
 	}
 
 	apiKey := os.Getenv("GEMINI_API_KEY")
+	a6ApiKey := os.Getenv("A6_API_KEY")
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
@@ -46,7 +47,7 @@ func main() {
 		path := c.Request.URL.Path
 		log.Printf("📥 Ingesting POST request: %s", path)
 		if strings.Contains(path, "chat/completions") {
-			handleOpenAIStyle(c, apiKey)
+			handleOpenAIStyle(c, apiKey, a6ApiKey)
 			return
 		}
 		handleGeminiNativeProxy(c, apiKey)
@@ -79,6 +80,9 @@ func handleModels(c *gin.Context) {
 		"data": []gin.H{
 			{"id": "gemini-3.8-flash", "object": "model", "owned_by": "google"},
 			{"id": "gemini-3.8-flash-search", "object": "model", "owned_by": "google"},
+			{"id": "kimi-k3", "object": "model", "owned_by": "moonshot"},
+			{"id": "glm-5.3", "object": "model", "owned_by": "zhipu"},
+			{"id": "gpt-5.6-luna", "object": "model", "owned_by": "openai"},
 		},
 	})
 }
@@ -421,8 +425,32 @@ func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promp
 		}
 
 		totalTokens := promptTokens + completionTokens
-		// Gemini 3.8 Flash 定价: Prompt $0.075 / 1M, Completion $0.30 / 1M
-		costUSD := (float64(promptTokens)*0.075 + float64(completionTokens)*0.30) / 1000000.0
+		provider := "higress-gemini"
+		providerKeyAlias := "OPENAI_API_KEY_FREE_3"
+
+		// 费率计算 (USD/1M Tokens)
+		promptPrice := 0.075
+		compPrice := 0.30
+
+		switch {
+		case strings.Contains(modelReq, "luna"):
+			provider = "a6api"
+			providerKeyAlias = "A6_API_KEY"
+			promptPrice = 0.25
+			compPrice = 1.00
+		case strings.Contains(modelReq, "kimi"):
+			provider = "a6api"
+			providerKeyAlias = "A6_API_KEY"
+			promptPrice = 0.15
+			compPrice = 0.60
+		case strings.Contains(modelReq, "glm"):
+			provider = "a6api"
+			providerKeyAlias = "A6_API_KEY"
+			promptPrice = 0.10
+			compPrice = 0.40
+		}
+
+		costUSD := (float64(promptTokens)*promptPrice + float64(completionTokens)*compPrice) / 1000000.0
 		fxRate := 7.2300
 		costCNY := costUSD * fxRate
 
@@ -432,8 +460,8 @@ func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promp
 			"api_key_alias":      keyAlias,
 			"model_requested":    modelReq,
 			"model_used":         modelUsed,
-			"provider":           "higress-gemini",
-			"provider_key_alias": "OPENAI_API_KEY_FREE_3",
+			"provider":           provider,
+			"provider_key_alias": providerKeyAlias,
 			"prompt_tokens":      promptTokens,
 			"completion_tokens":  completionTokens,
 			"reasoning_tokens":   0,
@@ -467,11 +495,195 @@ func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promp
 	}()
 }
 
+// handleA6StyleProxy 专职将 kimi-k3, glm-5.3, gpt-5.6-luna 转发至 A6 API 渠道并完成流式转译与审计上报
+func handleA6StyleProxy(c *gin.Context, req OpenAIChatRequest, a6ApiKey, rawAuthHeader string, startTime time.Time, structuredPrompt string) {
+	if a6ApiKey == "" {
+		a6ApiKey = os.Getenv("A6_API_KEY")
+	}
+	if a6ApiKey == "" {
+		log.Printf("❌ Critical: A6_API_KEY is not configured or empty")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "a6api configuration error: A6_API_KEY is empty"})
+		return
+	}
+
+	targetModel := req.Model
+	modelLower := strings.ToLower(req.Model)
+	switch {
+	case strings.Contains(modelLower, "kimi"):
+		targetModel = "kimi-k3"
+	case strings.Contains(modelLower, "glm"):
+		targetModel = "glm-5.3"
+	case strings.Contains(modelLower, "luna"):
+		targetModel = "gpt-5.6-luna"
+	}
+	req.Model = targetModel
+
+	reqBytes, err := json.Marshal(req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed serializing request"})
+		return
+	}
+
+	upstreamURL := "https://api.a6api.com/v1/chat/completions"
+	httpReq, err := http.NewRequestWithContext(c.Request.Context(), "POST", upstreamURL, bytes.NewReader(reqBytes))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+a6ApiKey)
+	httpReq.Header.Set("User-Agent", "higress-ai-gateway/2.0")
+
+	client := &http.Client{Timeout: 180 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("A6 API request failed: %v", err)})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		errBody, _ := io.ReadAll(resp.Body)
+		c.Data(resp.StatusCode, resp.Header.Get("Content-Type"), errBody)
+		return
+	}
+
+	chatCmplID := "chatcmpl-" + uuid.New().String()
+
+	if req.Stream {
+		c.Header("Content-Type", "text/event-stream")
+		c.Header("Cache-Control", "no-cache")
+		c.Header("Connection", "keep-alive")
+		flusher, _ := c.Writer.(http.Flusher)
+
+		scanner := bufio.NewScanner(resp.Body)
+		buf := make([]byte, 64*1024)
+		scanner.Buffer(buf, 1024*1024)
+
+		fullResponseText := ""
+		promptTokens := 0
+		completionTokens := 0
+		var streamToolCalls []gin.H
+
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			_, _ = c.Writer.Write([]byte(line + "\n\n"))
+			if flusher != nil {
+				flusher.Flush()
+			}
+
+			if !strings.HasPrefix(line, "data: ") || strings.TrimSpace(line) == "data: [DONE]" {
+				continue
+			}
+
+			jsonStr := strings.TrimPrefix(line, "data: ")
+			var chunkMap map[string]interface{}
+			if err := json.Unmarshal([]byte(jsonStr), &chunkMap); err == nil {
+				if id, ok := chunkMap["id"].(string); ok && id != "" {
+					chatCmplID = id
+				}
+				if usage, ok := chunkMap["usage"].(map[string]interface{}); ok {
+					if pt, ok := usage["prompt_tokens"].(float64); ok {
+						promptTokens = int(pt)
+					}
+					if ct, ok := usage["completion_tokens"].(float64); ok {
+						completionTokens = int(ct)
+					}
+				}
+				if choices, ok := chunkMap["choices"].([]interface{}); ok && len(choices) > 0 {
+					if ch, ok := choices[0].(map[string]interface{}); ok {
+						if delta, ok := ch["delta"].(map[string]interface{}); ok {
+							if cnt, ok := delta["content"].(string); ok {
+								fullResponseText += cnt
+							}
+							if tcs, ok := delta["tool_calls"].([]interface{}); ok {
+								for _, tcItem := range tcs {
+									if tcMap, ok := tcItem.(map[string]interface{}); ok {
+										streamToolCalls = append(streamToolCalls, tcMap)
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		latency := int(time.Since(startTime).Milliseconds())
+		respMap := map[string]interface{}{
+			"reply":      fullResponseText,
+			"tool_calls": streamToolCalls,
+		}
+		respJSONBytes, _ := json.Marshal(respMap)
+		reportAuditLogAsync(chatCmplID, rawAuthHeader, req.Model, targetModel, promptTokens, completionTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
+		return
+	}
+
+	// 非流式响应
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed reading A6 response"})
+		return
+	}
+
+	var resMap map[string]interface{}
+	if err := json.Unmarshal(respBody, &resMap); err == nil {
+		if id, ok := resMap["id"].(string); ok && id != "" {
+			chatCmplID = id
+		}
+	}
+
+	c.Data(resp.StatusCode, "application/json", respBody)
+
+	pTokens := 0
+	cTokens := 0
+	replyText := ""
+	var outToolCalls []gin.H
+
+	if resMap != nil {
+		if usage, ok := resMap["usage"].(map[string]interface{}); ok {
+			if pt, ok := usage["prompt_tokens"].(float64); ok {
+				pTokens = int(pt)
+			}
+			if ct, ok := usage["completion_tokens"].(float64); ok {
+				cTokens = int(ct)
+			}
+		}
+		if choices, ok := resMap["choices"].([]interface{}); ok && len(choices) > 0 {
+			if ch, ok := choices[0].(map[string]interface{}); ok {
+				if msg, ok := ch["message"].(map[string]interface{}); ok {
+					if cnt, ok := msg["content"].(string); ok {
+						replyText = cnt
+					}
+					if tcs, ok := msg["tool_calls"].([]interface{}); ok {
+						for _, tcItem := range tcs {
+							if tcMap, ok := tcItem.(map[string]interface{}); ok {
+								outToolCalls = append(outToolCalls, tcMap)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	latency := int(time.Since(startTime).Milliseconds())
+	respMap := map[string]interface{}{
+		"reply":      replyText,
+		"tool_calls": outToolCalls,
+	}
+	respJSONBytes, _ := json.Marshal(respMap)
+	reportAuditLogAsync(chatCmplID, rawAuthHeader, req.Model, targetModel, pTokens, cTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
+}
+
 // -----------------------------------------------------------------------------
 // handleOpenAIStyle: 接收标准 OpenAI 格式，转译调用 Google AI Studio
 // -----------------------------------------------------------------------------
 
-func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
+func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 	startTime := time.Now()
 	rawAuthHeader := c.GetHeader("Authorization")
 	if rawAuthHeader == "" {
@@ -479,25 +691,6 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 	}
 	if rawAuthHeader == "" {
 		rawAuthHeader = c.GetHeader("api-key")
-	}
-
-	key := defaultAPIKey
-	if key == "" {
-		key = os.Getenv("GEMINI_API_KEY")
-	}
-	if rawAuthHeader != "" {
-		token := strings.TrimPrefix(rawAuthHeader, "Bearer ")
-		token = strings.TrimSpace(token)
-		if strings.HasPrefix(token, "AIza") {
-			key = token
-		}
-	}
-	if key == "" {
-		log.Printf("❌ Critical: GEMINI_API_KEY is not configured or empty")
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "gemini-adapter configuration error: GEMINI_API_KEY is empty",
-		})
-		return
 	}
 
 	var req OpenAIChatRequest
@@ -537,6 +730,32 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey string) {
 	}
 	promptJSONBytes, _ := json.Marshal(promptMap)
 	structuredPrompt := string(promptJSONBytes)
+
+	// 🎯 A6 API 渠道智能路由: kimi-k3, glm-5.3, gpt-5.6-luna
+	modelLower := strings.ToLower(req.Model)
+	if strings.Contains(modelLower, "kimi") || strings.Contains(modelLower, "glm") || strings.Contains(modelLower, "luna") {
+		handleA6StyleProxy(c, req, a6ApiKey, rawAuthHeader, startTime, structuredPrompt)
+		return
+	}
+
+	key := defaultAPIKey
+	if key == "" {
+		key = os.Getenv("GEMINI_API_KEY")
+	}
+	if rawAuthHeader != "" {
+		token := strings.TrimPrefix(rawAuthHeader, "Bearer ")
+		token = strings.TrimSpace(token)
+		if strings.HasPrefix(token, "AIza") {
+			key = token
+		}
+	}
+	if key == "" {
+		log.Printf("❌ Critical: GEMINI_API_KEY is not configured or empty")
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "gemini-adapter configuration error: GEMINI_API_KEY is empty",
+		})
+		return
+	}
 
 	// 构造 Google 请求
 	gReq := GoogleGenerateContentRequest{
