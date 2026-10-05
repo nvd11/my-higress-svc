@@ -19,7 +19,7 @@ func RegisterLogsRoutes(rg *gin.RouterGroup, vlogsClient *vlogs.Client) {
 			c.JSON(http.StatusOK, gin.H{
 				"models": []string{
 					"gemini-3.8-flash",
-					"gemini-3.8-backup",
+					"gemini-3.8-flash-search",
 					"kimi-k3",
 					"glm-5.3",
 					"gpt-5.6-luna-a6",
@@ -44,7 +44,7 @@ func RegisterLogsRoutes(rg *gin.RouterGroup, vlogsClient *vlogs.Client) {
 		if len(models) == 0 {
 			models = []string{
 				"gemini-3.8-flash",
-				"gemini-3.8-backup",
+				"gemini-3.8-flash-search",
 				"kimi-k3",
 				"glm-5.3",
 				"gpt-5.6-luna-a6",
