@@ -516,6 +516,7 @@ func handleA6StyleProxy(c *gin.Context, req OpenAIChatRequest, a6ApiKey, rawAuth
 	case strings.Contains(modelLower, "luna"):
 		targetModel = "gpt-5.6-luna"
 	}
+	actualUsedModel := targetModel
 	req.Model = targetModel
 
 	reqBytes, err := json.Marshal(req)
@@ -536,6 +537,32 @@ func handleA6StyleProxy(c *gin.Context, req OpenAIChatRequest, a6ApiKey, rawAuth
 
 	client := &http.Client{Timeout: 180 * time.Second}
 	resp, err := client.Do(httpReq)
+
+	// 🛡️ 核心熔断降级 (Fallback): 若 kimi-k3 或 glm-5.3 发生异常/超时/限流 (5xx/429/网络中断)，自动平滑滑落至 gpt-5.6-luna 保底
+	shouldFallback := (targetModel == "kimi-k3" || targetModel == "glm-5.3")
+	if shouldFallback && (err != nil || resp == nil || resp.StatusCode >= 500 || resp.StatusCode == 429) {
+		failReason := "network error"
+		if resp != nil {
+			failReason = fmt.Sprintf("status %d", resp.StatusCode)
+			_ = resp.Body.Close()
+		}
+		log.Printf("⚠️ Model %s failed (%s), automatically falling back to gpt-5.6-luna backup...", targetModel, failReason)
+		actualUsedModel = "gpt-5.6-luna"
+		req.Model = "gpt-5.6-luna"
+		if fallbackBytes, bErr := json.Marshal(req); bErr == nil {
+			if fbReq, fbErr := http.NewRequestWithContext(c.Request.Context(), "POST", upstreamURL, bytes.NewReader(fallbackBytes)); fbErr == nil {
+				fbReq.Header.Set("Content-Type", "application/json")
+				fbReq.Header.Set("Authorization", "Bearer "+a6ApiKey)
+				fbReq.Header.Set("User-Agent", "higress-ai-gateway/2.0")
+				if fbResp, doErr := client.Do(fbReq); doErr == nil {
+					resp = fbResp
+					err = nil
+					log.Printf("✅ Fallback to gpt-5.6-luna succeeded with status %d", resp.StatusCode)
+				}
+			}
+		}
+	}
+
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("A6 API request failed: %v", err)})
 		return
@@ -618,7 +645,7 @@ func handleA6StyleProxy(c *gin.Context, req OpenAIChatRequest, a6ApiKey, rawAuth
 			"tool_calls": streamToolCalls,
 		}
 		respJSONBytes, _ := json.Marshal(respMap)
-		reportAuditLogAsync(chatCmplID, rawAuthHeader, req.Model, targetModel, promptTokens, completionTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
+		reportAuditLogAsync(chatCmplID, rawAuthHeader, req.Model, actualUsedModel, promptTokens, completionTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
 		return
 	}
 
@@ -676,7 +703,7 @@ func handleA6StyleProxy(c *gin.Context, req OpenAIChatRequest, a6ApiKey, rawAuth
 		"tool_calls": outToolCalls,
 	}
 	respJSONBytes, _ := json.Marshal(respMap)
-	reportAuditLogAsync(chatCmplID, rawAuthHeader, req.Model, targetModel, pTokens, cTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
+	reportAuditLogAsync(chatCmplID, rawAuthHeader, req.Model, actualUsedModel, pTokens, cTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
 }
 
 // -----------------------------------------------------------------------------
