@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -187,13 +188,13 @@ func (c *Client) ReadPayload(ctx context.Context, requestID, dateStr string) (ma
 	}
 
 	type ShardDoc struct {
-		ShardIndex  int    `json:"shard_index"`
-		TotalShards int    `json:"total_shards"`
-		PromptChunk string `json:"prompt_chunk"`
-		Prompt      string `json:"prompt"`
-		Response    string `json:"response"`
-		Model       string `json:"model"`
-		Time        string `json:"_time"`
+		ShardIndex  int
+		TotalShards int
+		PromptChunk string
+		Prompt      string
+		Response    string
+		Model       string
+		Time        string
 	}
 
 	var docs []ShardDoc
@@ -201,10 +202,37 @@ func (c *Client) ReadPayload(ctx context.Context, requestID, dateStr string) (ma
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		var doc ShardDoc
-		if err := json.Unmarshal([]byte(line), &doc); err == nil {
-			if doc.ShardIndex == 0 {
-				doc.ShardIndex = 1
+		var rawMap map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &rawMap); err == nil {
+			doc := ShardDoc{
+				PromptChunk: fmt.Sprintf("%v", rawMap["prompt_chunk"]),
+				Prompt:      fmt.Sprintf("%v", rawMap["prompt"]),
+				Response:    fmt.Sprintf("%v", rawMap["response"]),
+				Model:       fmt.Sprintf("%v", rawMap["model"]),
+				Time:        fmt.Sprintf("%v", rawMap["_time"]),
+				ShardIndex:  1,
+				TotalShards: 1,
+			}
+			// 兼容处理字符串与数字类型的 shard_index
+			if si, ok := rawMap["shard_index"]; ok {
+				switch siv := si.(type) {
+				case float64:
+					doc.ShardIndex = int(siv)
+				case string:
+					if n, err := strconv.Atoi(siv); err == nil {
+						doc.ShardIndex = n
+					}
+				}
+			}
+			if ts, ok := rawMap["total_shards"]; ok {
+				switch tsv := ts.(type) {
+				case float64:
+					doc.TotalShards = int(tsv)
+				case string:
+					if n, err := strconv.Atoi(tsv); err == nil {
+						doc.TotalShards = n
+					}
+				}
 			}
 			docs = append(docs, doc)
 		}
