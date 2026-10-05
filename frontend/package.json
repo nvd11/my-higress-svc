@@ -1,5 +1,5 @@
 {
-  "name": "litellm-observatory-frontend",
+  "name": "higress-observatory-frontend",
   "private": true,
   "version": "1.0.0",
   "type": "module",
