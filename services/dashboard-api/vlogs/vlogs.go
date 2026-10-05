@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -149,9 +150,29 @@ func (c *Client) WritePayload(ctx context.Context, requestID string, promptObj, 
 	return nil
 }
 
+func getStringField(m map[string]interface{}, key string) string {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return ""
+	}
+	switch s := v.(type) {
+	case string:
+		if s == "<nil>" {
+			return ""
+		}
+		return s
+	default:
+		b, err := json.Marshal(v)
+		if err == nil {
+			return string(b)
+		}
+		return fmt.Sprintf("%v", v)
+	}
+}
+
 // ReadPayload 通过 LogsQL 查询并重组还原分片
 func (c *Client) ReadPayload(ctx context.Context, requestID, dateStr string) (map[string]interface{}, map[string]interface{}, error) {
-	query := fmt.Sprintf(`env: "prod" AND type: "payload" AND request_id: exact("%s")`, requestID)
+	query := fmt.Sprintf(`type: "payload" AND request_id: exact("%s")`, requestID)
 	if dateStr != "" {
 		query += fmt.Sprintf(` AND _time: %s`, dateStr)
 	}
@@ -204,10 +225,13 @@ func (c *Client) ReadPayload(ctx context.Context, requestID, dateStr string) (ma
 		}
 		var rawMap map[string]interface{}
 		if err := json.Unmarshal([]byte(line), &rawMap); err == nil {
+			pChunk := getStringField(rawMap, "prompt_chunk")
+			pFull := getStringField(rawMap, "prompt")
+			respStr := getStringField(rawMap, "response")
 			doc := ShardDoc{
-				PromptChunk: fmt.Sprintf("%v", rawMap["prompt_chunk"]),
-				Prompt:      fmt.Sprintf("%v", rawMap["prompt"]),
-				Response:    fmt.Sprintf("%v", rawMap["response"]),
+				PromptChunk: pChunk,
+				Prompt:      pFull,
+				Response:    respStr,
 				Model:       fmt.Sprintf("%v", rawMap["model"]),
 				Time:        fmt.Sprintf("%v", rawMap["_time"]),
 				ShardIndex:  1,
@@ -283,6 +307,7 @@ func (c *Client) ReadPayload(ctx context.Context, requestID, dateStr string) (ma
 		responseObj = map[string]interface{}{"reply": finalResponseStr}
 	}
 
+	log.Printf("📖 ReadPayload restored for %s: promptLen=%d, respLen=%d", requestID, len(fullPromptStr), len(finalResponseStr))
 	return promptObj, responseObj, nil
 }
 
