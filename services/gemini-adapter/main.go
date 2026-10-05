@@ -79,7 +79,6 @@ func handleModels(c *gin.Context) {
 		"data": []gin.H{
 			{"id": "gemini-3.8-flash", "object": "model", "owned_by": "google"},
 			{"id": "gemini-3.8-flash-search", "object": "model", "owned_by": "google"},
-			{"id": "gemini-3.8-backup", "object": "model", "owned_by": "google"},
 		},
 	})
 }
