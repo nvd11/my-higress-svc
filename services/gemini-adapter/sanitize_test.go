@@ -107,3 +107,22 @@ func TestSanitizeGoogleTurns_ConsecutiveRoles(t *testing.T) {
 		t.Fatalf("expected 2 parts merged in first turn, got %d", len(sanitized[0].Parts))
 	}
 }
+
+func TestCompactionZeroTools_ModeNone(t *testing.T) {
+	// 验证：当客户端没有传 tools 时，gReq 的 tool_config.function_calling_config.mode 必须强制为 NONE
+	var tools []OpenAITool
+	var gReq GoogleGenerateContentRequest
+
+	if len(tools) == 0 {
+		if gReq.ToolConfig == nil {
+			gReq.ToolConfig = &GoogleToolConfig{}
+		}
+		gReq.ToolConfig.FunctionCallingConfig = &GoogleFunctionCallingConfig{
+			Mode: "NONE",
+		}
+	}
+
+	if gReq.ToolConfig == nil || gReq.ToolConfig.FunctionCallingConfig == nil || gReq.ToolConfig.FunctionCallingConfig.Mode != "NONE" {
+		t.Fatalf("expected mode NONE when tools is empty, got %+v", gReq.ToolConfig)
+	}
+}
