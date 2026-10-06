@@ -141,7 +141,12 @@ type GoogleGenerateContentRequest struct {
 }
 
 type GoogleToolConfig struct {
-	IncludeServerSideToolInvocations bool `json:"include_server_side_tool_invocations"`
+	FunctionCallingConfig           *GoogleFunctionCallingConfig `json:"function_calling_config,omitempty"`
+	IncludeServerSideToolInvocations bool                         `json:"include_server_side_tool_invocations,omitempty"`
+}
+
+type GoogleFunctionCallingConfig struct {
+	Mode string `json:"mode,omitempty"`
 }
 
 type GoogleContent struct {
@@ -959,7 +964,21 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 	if enableSearch {
 		gReq.Tools = append(gReq.Tools, GoogleTool{GoogleSearch: &struct{}{}})
 		if len(req.Tools) > 0 {
-			gReq.ToolConfig = &GoogleToolConfig{IncludeServerSideToolInvocations: true}
+			if gReq.ToolConfig == nil {
+				gReq.ToolConfig = &GoogleToolConfig{}
+			}
+			gReq.ToolConfig.IncludeServerSideToolInvocations = true
+		}
+	}
+
+	// 防御机制：当客户端未提供 tools（如 OpenCode 在 session compaction / 摘要模式下，严禁任何 tool-call）
+	// 主动向 Google 声明 function_calling_config.mode = "NONE"，杜绝模型根据历史上下文幻觉发起工具调用
+	if len(req.Tools) == 0 {
+		if gReq.ToolConfig == nil {
+			gReq.ToolConfig = &GoogleToolConfig{}
+		}
+		gReq.ToolConfig.FunctionCallingConfig = &GoogleFunctionCallingConfig{
+			Mode: "NONE",
 		}
 	}
 
@@ -1100,6 +1119,10 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 				}
 
 				if part.FunctionCall != nil {
+					if len(req.Tools) == 0 {
+						log.Printf("⚠️ Suppressing unexpected FunctionCall '%s' from Google upstream because client requested NO tools", part.FunctionCall.Name)
+						continue
+					}
 					hasToolCalls = true
 					argsBytes, _ := json.Marshal(part.FunctionCall.Args)
 					callID := part.FunctionCall.ID
@@ -1274,6 +1297,10 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 			outContent += part.Text
 		}
 		if part.FunctionCall != nil {
+			if len(req.Tools) == 0 {
+				log.Printf("⚠️ Suppressing unexpected FunctionCall '%s' from Google upstream because client requested NO tools", part.FunctionCall.Name)
+				continue
+			}
 			argsBytes, _ := json.Marshal(part.FunctionCall.Args)
 			callID := part.FunctionCall.ID
 			if callID == "" {
