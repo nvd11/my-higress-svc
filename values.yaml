@@ -46,6 +46,10 @@ gateway:
   # 暴露 Service 策略 (与 OCI ALB 对接入站)
   service:
     type: LoadBalancer
+    annotations:
+      konghq.com/read-timeout: "600000"
+      konghq.com/write-timeout: "600000"
+      konghq.com/connect-timeout: "60000"
     ports:
       - name: http2
         port: 8080
