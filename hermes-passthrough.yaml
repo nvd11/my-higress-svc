@@ -17,7 +17,9 @@ metadata:
     app.kubernetes.io/part-of: my-higress-svc
 spec:
   parentRefs:
-    - name: higress-gateway
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: higress-gateway
       namespace: higress-system
   rules:
     # 🎀 结衣 Yui 原生直通规则 (目标端口: 8644)
@@ -26,7 +28,9 @@ spec:
             type: PathPrefix
             value: /hermes/yui
       backendRefs:
-        - name: yui-agent-upstream
+        - group: ""
+          kind: Service
+          name: yui-agent-upstream
           port: 8644
           weight: 100
 
@@ -36,7 +40,9 @@ spec:
             type: PathPrefix
             value: /hermes/rin
       backendRefs:
-        - name: rin-agent-upstream
+        - group: ""
+          kind: Service
+          name: rin-agent-upstream
           port: 8642
           weight: 100
 
