@@ -220,9 +220,10 @@ type GoogleFeedback struct {
 }
 
 type GoogleUsage struct {
-	PromptTokenCount     int `json:"promptTokenCount"`
-	CandidatesTokenCount int `json:"candidatesTokenCount"`
-	TotalTokenCount      int `json:"totalTokenCount"`
+	PromptTokenCount        int `json:"promptTokenCount"`
+	CandidatesTokenCount    int `json:"candidatesTokenCount"`
+	TotalTokenCount         int `json:"totalTokenCount"`
+	CachedContentTokenCount int `json:"cachedContentTokenCount,omitempty"`
 }
 
 // sanitizeGoogleTurns 解决 Google Gemini 原生对话时序强校验限制:
@@ -396,13 +397,13 @@ func cleanGeminiSchema(schema interface{}) interface{} {
 }
 
 // reportAuditLogAsync 异步向 dashboard-backend 上报审计与计量日志
-func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promptTokens, completionTokens int, latencyMs int, statusCode int, promptText, respText string, errText *string) {
+func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promptTokens, completionTokens, cacheReadTokens int, latencyMs int, statusCode int, promptText, respText string, errText *string) {
 	backendURL := os.Getenv("AUDIT_BACKEND_URL")
 	if backendURL == "" {
 		backendURL = "http://higress-dashboard-backend.higress-system.svc.cluster.local:4000/api/v1/internal/audit-log"
 	}
 
-	log.Printf("🚀 Invoked reportAuditLogAsync: reqID=%s, authHeader=%s, promptTokens=%d, compTokens=%d", reqID, rawAuthHeader, promptTokens, completionTokens)
+	log.Printf("🚀 Invoked reportAuditLogAsync: reqID=%s, authHeader=%s, promptTokens=%d, compTokens=%d, cacheTokens=%d", reqID, rawAuthHeader, promptTokens, completionTokens, cacheReadTokens)
 
 	go func() {
 		defer func() {
@@ -433,9 +434,17 @@ func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promp
 		provider := "higress-gemini"
 		providerKeyAlias := "OPENAI_API_KEY_FREE_3"
 
-		// 费率计算 (USD/1M Tokens)
+		// 费率计算基准 (USD / 1M Tokens)
 		promptPrice := 0.075
 		compPrice := 0.30
+		cachePrice := 0.01875 // 缓存读取基准 2.5 折 (75% discount)
+
+		// 阶梯计费: Google 官方对 > 128k Tokens 的超长 Prompt 触发翻倍费率
+		if promptTokens > 128000 {
+			promptPrice = 0.150
+			compPrice = 0.600
+			cachePrice = 0.0375
+		}
 
 		switch {
 		case strings.Contains(modelReq, "luna"):
@@ -443,43 +452,55 @@ func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promp
 			providerKeyAlias = "A6_API_KEY"
 			promptPrice = 0.25
 			compPrice = 1.00
+			cachePrice = 0.125
 		case strings.Contains(modelReq, "kimi"):
 			provider = "a6api"
 			providerKeyAlias = "A6_API_KEY"
 			promptPrice = 0.15
 			compPrice = 0.60
+			cachePrice = 0.03
 		case strings.Contains(modelReq, "glm"):
 			provider = "a6api"
 			providerKeyAlias = "A6_API_KEY"
 			promptPrice = 0.10
 			compPrice = 0.40
+			cachePrice = 0.02
 		}
 
-		costUSD := (float64(promptTokens)*promptPrice + float64(completionTokens)*compPrice) / 1000000.0
+		// 精准扣减计费: 命中缓存部分按 cachePrice 计算，未命中部分按 promptPrice 计算
+		nonCachedTokens := promptTokens - cacheReadTokens
+		if nonCachedTokens < 0 {
+			nonCachedTokens = 0
+		}
+		costUSD := (float64(nonCachedTokens)*promptPrice + float64(cacheReadTokens)*cachePrice + float64(completionTokens)*compPrice) / 1000000.0
 		fxRate := 7.2300
 		costCNY := costUSD * fxRate
 
 		payload := map[string]interface{}{
-			"id":                 reqID,
-			"request_id":         reqID,
-			"api_key_alias":      keyAlias,
-			"model_requested":    modelReq,
-			"model_used":         modelUsed,
-			"provider":           provider,
-			"provider_key_alias": providerKeyAlias,
-			"prompt_tokens":      promptTokens,
-			"completion_tokens":  completionTokens,
-			"reasoning_tokens":   0,
-			"total_tokens":       totalTokens,
-			"cost_usd":           costUSD,
-			"cost_cny":           costCNY,
-			"fx_rate":            fxRate,
-			"latency_ms":         latencyMs,
-			"status_code":        statusCode,
-			"error_msg":          errText,
-			"created_at":         time.Now().UTC(),
-			"prompt":             promptText,
-			"response":           respText,
+			"id":                         reqID,
+			"request_id":                 reqID,
+			"api_key_alias":              keyAlias,
+			"model_requested":            modelReq,
+			"model_used":                 modelUsed,
+			"provider":                   provider,
+			"provider_key_alias":         providerKeyAlias,
+			"prompt_tokens":              promptTokens,
+			"completion_tokens":          completionTokens,
+			"reasoning_tokens":           0,
+			"cache_read_tokens":          cacheReadTokens,
+			"total_tokens":               totalTokens,
+			"prompt_unit_price_usd":      promptPrice,
+			"cache_unit_price_usd":       cachePrice,
+			"completion_unit_price_usd":  compPrice,
+			"cost_usd":                   costUSD,
+			"cost_cny":                   costCNY,
+			"fx_rate":                    fxRate,
+			"latency_ms":                 latencyMs,
+			"status_code":                statusCode,
+			"error_msg":                  errText,
+			"created_at":                 time.Now().UTC(),
+			"prompt":                     promptText,
+			"response":                   respText,
 		}
 
 		b, _ := json.Marshal(payload)
@@ -595,6 +616,7 @@ func handleA6StyleProxy(c *gin.Context, req OpenAIChatRequest, a6ApiKey, rawAuth
 		fullResponseText := ""
 		promptTokens := 0
 		completionTokens := 0
+		cacheReadTokens := 0
 		var streamToolCalls []gin.H
 
 		for scanner.Scan() {
@@ -624,6 +646,11 @@ func handleA6StyleProxy(c *gin.Context, req OpenAIChatRequest, a6ApiKey, rawAuth
 					if ct, ok := usage["completion_tokens"].(float64); ok {
 						completionTokens = int(ct)
 					}
+					if ptd, ok := usage["prompt_tokens_details"].(map[string]interface{}); ok {
+						if ct, ok := ptd["cached_tokens"].(float64); ok {
+							cacheReadTokens = int(ct)
+						}
+					}
 				}
 				if choices, ok := chunkMap["choices"].([]interface{}); ok && len(choices) > 0 {
 					if ch, ok := choices[0].(map[string]interface{}); ok {
@@ -650,7 +677,7 @@ func handleA6StyleProxy(c *gin.Context, req OpenAIChatRequest, a6ApiKey, rawAuth
 			"tool_calls": streamToolCalls,
 		}
 		respJSONBytes, _ := json.Marshal(respMap)
-		reportAuditLogAsync(chatCmplID, rawAuthHeader, req.Model, actualUsedModel, promptTokens, completionTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
+		reportAuditLogAsync(chatCmplID, rawAuthHeader, req.Model, actualUsedModel, promptTokens, completionTokens, cacheReadTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
 		return
 	}
 
@@ -672,6 +699,7 @@ func handleA6StyleProxy(c *gin.Context, req OpenAIChatRequest, a6ApiKey, rawAuth
 
 	pTokens := 0
 	cTokens := 0
+	cacheTokens := 0
 	replyText := ""
 	var outToolCalls []gin.H
 
@@ -682,6 +710,11 @@ func handleA6StyleProxy(c *gin.Context, req OpenAIChatRequest, a6ApiKey, rawAuth
 			}
 			if ct, ok := usage["completion_tokens"].(float64); ok {
 				cTokens = int(ct)
+			}
+			if ptd, ok := usage["prompt_tokens_details"].(map[string]interface{}); ok {
+				if ct, ok := ptd["cached_tokens"].(float64); ok {
+					cacheTokens = int(ct)
+				}
 			}
 		}
 		if choices, ok := resMap["choices"].([]interface{}); ok && len(choices) > 0 {
@@ -708,7 +741,7 @@ func handleA6StyleProxy(c *gin.Context, req OpenAIChatRequest, a6ApiKey, rawAuth
 		"tool_calls": outToolCalls,
 	}
 	respJSONBytes, _ := json.Marshal(respMap)
-	reportAuditLogAsync(chatCmplID, rawAuthHeader, req.Model, actualUsedModel, pTokens, cTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
+	reportAuditLogAsync(chatCmplID, rawAuthHeader, req.Model, actualUsedModel, pTokens, cTokens, cacheTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
 }
 
 // -----------------------------------------------------------------------------
@@ -1038,6 +1071,7 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 		fullResponseText := ""
 		promptTokens := 0
 		completionTokens := 0
+		cacheReadTokens := 0
 
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -1213,6 +1247,9 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 				if gResp.UsageMetadata != nil {
 					promptTokens = gResp.UsageMetadata.PromptTokenCount
 					completionTokens = gResp.UsageMetadata.CandidatesTokenCount
+					if gResp.UsageMetadata.CachedContentTokenCount > 0 {
+						cacheReadTokens = gResp.UsageMetadata.CachedContentTokenCount
+					}
 					usage = gin.H{
 						"prompt_tokens":     gResp.UsageMetadata.PromptTokenCount,
 						"completion_tokens": gResp.UsageMetadata.CandidatesTokenCount,
@@ -1254,7 +1291,7 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 			"tool_calls": streamToolCalls,
 		}
 		respJSONBytes, _ := json.Marshal(respMap)
-		reportAuditLogAsync(chatCmplID, rawAuthHeader, model, realModel, promptTokens, completionTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
+		reportAuditLogAsync(chatCmplID, rawAuthHeader, model, realModel, promptTokens, completionTokens, cacheReadTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
 		return
 	}
 
@@ -1382,9 +1419,13 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 	// 异步上报审计日志至 dashboard-backend
 	pTokens := 0
 	cTokens := 0
+	cacheTokens := 0
 	if gResp.UsageMetadata != nil {
 		pTokens = gResp.UsageMetadata.PromptTokenCount
 		cTokens = gResp.UsageMetadata.CandidatesTokenCount
+		if gResp.UsageMetadata.CachedContentTokenCount > 0 {
+			cacheTokens = gResp.UsageMetadata.CachedContentTokenCount
+		}
 	}
 	latency := int(time.Since(startTime).Milliseconds())
 	respMap := map[string]interface{}{
@@ -1392,7 +1433,7 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 		"tool_calls": outToolCalls,
 	}
 	respJSONBytes, _ := json.Marshal(respMap)
-	reportAuditLogAsync(chatCmplID, rawAuthHeader, model, realModel, pTokens, cTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
+	reportAuditLogAsync(chatCmplID, rawAuthHeader, model, realModel, pTokens, cTokens, cacheTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
 }
 
 // stripThoughtSignaturePlaceholder 递归清洗客户端注入的非法伪造签名 (如 thought_signature_placeholder)

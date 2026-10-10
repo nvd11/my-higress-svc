@@ -14,26 +14,30 @@ import (
 )
 
 type WasmAuditRecordInput struct {
-	ID               string    `json:"id"`
-	RequestID        string    `json:"request_id"`
-	APIKeyAlias      string    `json:"api_key_alias"`
-	ModelRequested   string    `json:"model_requested"`
-	ModelUsed        string    `json:"model_used"`
-	Provider         string    `json:"provider"`
-	ProviderKeyAlias string    `json:"provider_key_alias"`
-	PromptTokens     int       `json:"prompt_tokens"`
-	CompletionTokens int       `json:"completion_tokens"`
-	ReasoningTokens  int       `json:"reasoning_tokens"`
-	TotalTokens      int       `json:"total_tokens"`
-	CostUSD          float64   `json:"cost_usd"`
-	CostCNY          float64   `json:"cost_cny"`
-	FxRate           float64   `json:"fx_rate"`
-	LatencyMS        int       `json:"latency_ms"`
-	StatusCode       int       `json:"status_code"`
-	ErrorMsg         *string   `json:"error_msg"`
-	CreatedAt        time.Time `json:"created_at"`
-	Prompt           string    `json:"prompt"`
-	Response         string    `json:"response"`
+	ID                     string    `json:"id"`
+	RequestID              string    `json:"request_id"`
+	APIKeyAlias            string    `json:"api_key_alias"`
+	ModelRequested         string    `json:"model_requested"`
+	ModelUsed              string    `json:"model_used"`
+	Provider               string    `json:"provider"`
+	ProviderKeyAlias       string    `json:"provider_key_alias"`
+	PromptTokens           int       `json:"prompt_tokens"`
+	CompletionTokens       int       `json:"completion_tokens"`
+	ReasoningTokens        int       `json:"reasoning_tokens"`
+	CacheReadTokens        int       `json:"cache_read_tokens"`
+	TotalTokens            int       `json:"total_tokens"`
+	PromptUnitPriceUSD     float64   `json:"prompt_unit_price_usd"`
+	CacheUnitPriceUSD      float64   `json:"cache_unit_price_usd"`
+	CompletionUnitPriceUSD float64   `json:"completion_unit_price_usd"`
+	CostUSD                float64   `json:"cost_usd"`
+	CostCNY                float64   `json:"cost_cny"`
+	FxRate                 float64   `json:"fx_rate"`
+	LatencyMS              int       `json:"latency_ms"`
+	StatusCode             int       `json:"status_code"`
+	ErrorMsg               *string   `json:"error_msg"`
+	CreatedAt              time.Time `json:"created_at"`
+	Prompt                 string    `json:"prompt"`
+	Response               string    `json:"response"`
 }
 
 func RegisterInternalRoutes(rg *gin.RouterGroup, vlogsClient *vlogs.Client) {
@@ -81,19 +85,25 @@ func RegisterInternalRoutes(rg *gin.RouterGroup, vlogsClient *vlogs.Client) {
 					INSERT INTO llm_request_logs (
 						id, request_id, api_key_alias, model_requested, model_used,
 						provider, provider_key_alias, prompt_tokens, completion_tokens,
-						total_tokens, cost_usd, cost_cny, fx_rate,
+						reasoning_tokens, cache_read_tokens, total_tokens,
+						prompt_unit_price_usd, cache_unit_price_usd, completion_unit_price_usd,
+						cost_usd, cost_cny, fx_rate,
 						latency_ms, status_code, error_msg, created_at
 					) VALUES (
 						?, ?, ?, ?, ?,
 						?, ?, ?, ?,
-						?, ?, ?, ?,
+						?, ?, ?,
+						?, ?, ?,
+						?, ?, ?,
 						?, ?, ?, ?
 					)
 				`
 				res, err := db.DB.ExecContext(ctx, insertSql,
 					dbID, rec.RequestID, rec.APIKeyAlias, rec.ModelRequested, rec.ModelUsed,
 					rec.Provider, rec.ProviderKeyAlias, rec.PromptTokens, rec.CompletionTokens,
-					rec.TotalTokens, rec.CostUSD, rec.CostCNY, rec.FxRate,
+					rec.ReasoningTokens, rec.CacheReadTokens, rec.TotalTokens,
+					rec.PromptUnitPriceUSD, rec.CacheUnitPriceUSD, rec.CompletionUnitPriceUSD,
+					rec.CostUSD, rec.CostCNY, rec.FxRate,
 					rec.LatencyMS, rec.StatusCode, rec.ErrorMsg, rec.CreatedAt,
 				)
 				if err != nil {
