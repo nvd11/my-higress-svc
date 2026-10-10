@@ -21,6 +21,11 @@ var thoughtSigCache sync.Map // map[string]string: callID / toolName -> thoughtS
 var callIDToName sync.Map    // map[string]string: callID -> functionName
 
 func main() {
+	// 加载模型与路由配置 (支持 config.yaml 或环境变量)
+	if _, err := LoadConfig(""); err != nil {
+		log.Printf("⚠️ Warning initializing config: %v", err)
+	}
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
@@ -434,45 +439,37 @@ func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promp
 		provider := "higress-gemini"
 		providerKeyAlias := "OPENAI_API_KEY_FREE_3"
 
-		// 费率计算基准 (USD / 1M Tokens)
+		// 默认费率计算基准 (USD / 1M Tokens)
 		promptPrice := 0.075
 		compPrice := 0.30
-		cachePrice := 0.01875 // 缓存读取基准 2.5 折 (75% discount)
+		cachePrice := 0.01875
 
-		// 阶梯计费: Google 官方对 > 128k Tokens 的超长 Prompt 触发翻倍费率
-		if promptTokens > 128000 {
-			promptPrice = 0.150
-			compPrice = 0.600
-			cachePrice = 0.0375
+		// 🎯 动态模型配置与费率解析
+		mCfg := FindModelConfig(modelReq)
+		if mCfg == nil && modelUsed != "" {
+			mCfg = FindModelConfig(modelUsed)
 		}
 
-		switch {
-		case strings.Contains(modelReq, "luna"):
-			provider = "a6api"
-			providerKeyAlias = "A6_API_KEY"
-			promptPrice = 0.25
-			compPrice = 1.00
-			cachePrice = 0.125
-		case strings.Contains(modelReq, "kimi"):
-			provider = "a6api"
-			providerKeyAlias = "A6_API_KEY"
-			promptPrice = 0.15
-			compPrice = 0.60
-			cachePrice = 0.03
-		case strings.Contains(modelReq, "glm"):
-			provider = "a6api"
-			providerKeyAlias = "A6_API_KEY"
-			promptPrice = 0.10
-			compPrice = 0.40
-			cachePrice = 0.02
+		var costUSD float64
+		if mCfg != nil {
+			provider = mCfg.Provider
+			if mCfg.APIKey != "" {
+				providerKeyAlias = strings.TrimPrefix(mCfg.APIKey, "os.environ/")
+			}
+			costUSD, promptPrice, cachePrice, compPrice = mCfg.CalculatePrice(promptTokens, cacheReadTokens, completionTokens)
+		} else {
+			// 备用兜底逻辑: 阶梯计费 > 128k
+			if promptTokens > 128000 {
+				promptPrice = 0.150
+				compPrice = 0.600
+				cachePrice = 0.0375
+			}
+			nonCachedTokens := promptTokens - cacheReadTokens
+			if nonCachedTokens < 0 {
+				nonCachedTokens = 0
+			}
+			costUSD = (float64(nonCachedTokens)*promptPrice + float64(cacheReadTokens)*cachePrice + float64(completionTokens)*compPrice) / 1000000.0
 		}
-
-		// 精准扣减计费: 命中缓存部分按 cachePrice 计算，未命中部分按 promptPrice 计算
-		nonCachedTokens := promptTokens - cacheReadTokens
-		if nonCachedTokens < 0 {
-			nonCachedTokens = 0
-		}
-		costUSD := (float64(nonCachedTokens)*promptPrice + float64(cacheReadTokens)*cachePrice + float64(completionTokens)*compPrice) / 1000000.0
 		fxRate := 7.2300
 		costCNY := costUSD * fxRate
 
@@ -521,26 +518,17 @@ func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promp
 	}()
 }
 
-// handleA6StyleProxy 专职将 kimi-k3, glm-5.3, gpt-5.6-luna 转发至 A6 API 渠道并完成流式转译与审计上报
-func handleA6StyleProxy(c *gin.Context, req OpenAIChatRequest, a6ApiKey, rawAuthHeader string, startTime time.Time, structuredPrompt string) {
-	if a6ApiKey == "" {
-		a6ApiKey = os.Getenv("A6_API_KEY")
-	}
-	if a6ApiKey == "" {
-		log.Printf("❌ Critical: A6_API_KEY is not configured or empty")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "a6api configuration error: A6_API_KEY is empty"})
+// handleOpenAIUpstreamProxy 根据 config.yaml 配置将 OpenAI 协议请求转发至上游并处理降级与审计
+func handleOpenAIUpstreamProxy(c *gin.Context, req OpenAIChatRequest, mCfg *ModelConfig, apiKey, rawAuthHeader string, startTime time.Time, structuredPrompt string) {
+	if apiKey == "" {
+		log.Printf("❌ Critical: Upstream API key is empty for model %s", req.Model)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("configuration error: API key is empty for %s", req.Model)})
 		return
 	}
 
 	targetModel := req.Model
-	modelLower := strings.ToLower(req.Model)
-	switch {
-	case strings.Contains(modelLower, "kimi"):
-		targetModel = "kimi-k3"
-	case strings.Contains(modelLower, "glm"):
-		targetModel = "glm-5.3"
-	case strings.Contains(modelLower, "luna"):
-		targetModel = "gpt-5.6-luna"
+	if mCfg.UpstreamModel != "" {
+		targetModel = mCfg.UpstreamModel
 	}
 	actualUsedModel := targetModel
 	req.Model = targetModel
@@ -551,39 +539,56 @@ func handleA6StyleProxy(c *gin.Context, req OpenAIChatRequest, a6ApiKey, rawAuth
 		return
 	}
 
-	upstreamURL := "https://api.a6api.com/v1/chat/completions"
+	upstreamURL := mCfg.UpstreamURL
+	if upstreamURL == "" {
+		upstreamURL = "https://api.a6api.com/v1/chat/completions"
+	}
+
 	httpReq, err := http.NewRequestWithContext(c.Request.Context(), "POST", upstreamURL, bytes.NewReader(reqBytes))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+a6ApiKey)
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	httpReq.Header.Set("User-Agent", "higress-ai-gateway/2.0")
 
 	client := &http.Client{Timeout: 180 * time.Second}
 	resp, err := client.Do(httpReq)
 
-	// 🛡️ 核心熔断降级 (Fallback): 若 kimi-k3 或 glm-5.3 发生异常/超时/限流 (5xx/429/网络中断)，自动平滑滑落至 gpt-5.6-luna 保底
-	shouldFallback := (targetModel == "kimi-k3" || targetModel == "glm-5.3")
-	if shouldFallback && (err != nil || resp == nil || resp.StatusCode >= 500 || resp.StatusCode == 429) {
+	// 🛡️ 声明式熔断降级 (Fallback): 根据 config.yaml 的 fallback 字段
+	fallbackModel := mCfg.Fallback
+	if fallbackModel != "" && (err != nil || resp == nil || resp.StatusCode >= 500 || resp.StatusCode == 429) {
 		failReason := "network error"
 		if resp != nil {
 			failReason = fmt.Sprintf("status %d", resp.StatusCode)
 			_ = resp.Body.Close()
 		}
-		log.Printf("⚠️ Model %s failed (%s), automatically falling back to gpt-5.6-luna backup...", targetModel, failReason)
-		actualUsedModel = "gpt-5.6-luna"
-		req.Model = "gpt-5.6-luna"
+		log.Printf("⚠️ Model %s failed (%s), automatically falling back to %s backup...", targetModel, failReason, fallbackModel)
+		actualUsedModel = fallbackModel
+		req.Model = fallbackModel
+
+		fallbackURL := upstreamURL
+		fallbackKey := apiKey
+		fbCfg := FindModelConfig(fallbackModel)
+		if fbCfg != nil {
+			if fbCfg.UpstreamURL != "" {
+				fallbackURL = fbCfg.UpstreamURL
+			}
+			if fbCfg.ResolveKey() != "" {
+				fallbackKey = fbCfg.ResolveKey()
+			}
+		}
+
 		if fallbackBytes, bErr := json.Marshal(req); bErr == nil {
-			if fbReq, fbErr := http.NewRequestWithContext(c.Request.Context(), "POST", upstreamURL, bytes.NewReader(fallbackBytes)); fbErr == nil {
+			if fbReq, fbErr := http.NewRequestWithContext(c.Request.Context(), "POST", fallbackURL, bytes.NewReader(fallbackBytes)); fbErr == nil {
 				fbReq.Header.Set("Content-Type", "application/json")
-				fbReq.Header.Set("Authorization", "Bearer "+a6ApiKey)
+				fbReq.Header.Set("Authorization", "Bearer "+fallbackKey)
 				fbReq.Header.Set("User-Agent", "higress-ai-gateway/2.0")
 				if fbResp, doErr := client.Do(fbReq); doErr == nil {
 					resp = fbResp
 					err = nil
-					log.Printf("✅ Fallback to gpt-5.6-luna succeeded with status %d", resp.StatusCode)
+					log.Printf("✅ Fallback to %s succeeded with status %d", fallbackModel, resp.StatusCode)
 				}
 			}
 		}
@@ -796,14 +801,21 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 	promptJSONBytes, _ := json.Marshal(promptMap)
 	structuredPrompt := string(promptJSONBytes)
 
-	// 🎯 A6 API 渠道智能路由: kimi-k3, glm-5.3, gpt-5.6-luna
-	modelLower := strings.ToLower(req.Model)
-	if strings.Contains(modelLower, "kimi") || strings.Contains(modelLower, "glm") || strings.Contains(modelLower, "luna") {
-		handleA6StyleProxy(c, req, a6ApiKey, rawAuthHeader, startTime, structuredPrompt)
+	// 🎯 动态模型路由匹配 (基于 config.yaml 声明)
+	mCfg := FindModelConfig(req.Model)
+	if mCfg != nil && mCfg.Protocol == "openai" {
+		upstreamKey := mCfg.ResolveKey()
+		if upstreamKey == "" {
+			upstreamKey = a6ApiKey
+		}
+		handleOpenAIUpstreamProxy(c, req, mCfg, upstreamKey, rawAuthHeader, startTime, structuredPrompt)
 		return
 	}
 
 	key := defaultAPIKey
+	if mCfg != nil && mCfg.ResolveKey() != "" {
+		key = mCfg.ResolveKey()
+	}
 	if key == "" {
 		key = os.Getenv("GEMINI_API_KEY")
 	}
@@ -970,8 +982,13 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 	}
 	enableSearch := strings.HasSuffix(model, "-search") || strings.HasSuffix(model, ":search")
 	realModel := model
-	if enableSearch {
+	if mCfg != nil && mCfg.UpstreamModel != "" {
+		realModel = mCfg.UpstreamModel
+	} else if enableSearch {
 		realModel = strings.TrimSuffix(strings.TrimSuffix(model, "-search"), ":search")
+	}
+	if mCfg != nil && mCfg.EnableSearch {
+		enableSearch = true
 	}
 	if realModel == "" {
 		realModel = "gemini-3.8-flash"
