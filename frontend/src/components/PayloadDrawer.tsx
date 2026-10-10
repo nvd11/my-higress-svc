@@ -424,7 +424,10 @@ export const PayloadDrawer: React.FC<PayloadDrawerProps> = ({ log, onClose }) =>
                 </div>
                 {!collapsed["user"] && (
                   <div className="p-3 bg-white text-slate-900 whitespace-pre-wrap leading-relaxed font-sans border-t border-blue-200/70 font-medium">
-                    {renderContent(payloadData?.prompt?.user_prompt) || "（无最新单独用户输入）"}
+                    {renderContent(payloadData?.prompt?.user_prompt) ||
+                      (payloadData?.prompt as any)?.raw_text ||
+                      (payloadData?.prompt as any)?.raw_content ||
+                      "（无最新单独用户输入）"}
                   </div>
                 )}
               </div>

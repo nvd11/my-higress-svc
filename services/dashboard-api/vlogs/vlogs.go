@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	DefaultChunkSize      = 1300000
-	SafeSingleEntryLimit  = 1900000
+	DefaultChunkSize     = 800000
+	SafeSingleEntryLimit = 1200000
 )
 
 type Client struct {
@@ -111,7 +111,6 @@ func (c *Client) WritePayload(ctx context.Context, requestID string, promptObj, 
 			"shard_index":  shardIdx,
 			"total_shards": totalShards,
 			"prompt_chunk": chunk,
-			"prompt":       chunk,
 			"response":     "",
 		}
 		if shardIdx == 1 {
