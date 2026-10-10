@@ -20,11 +20,15 @@ type LLMRequestLog struct {
 	ModelUsed        string    `db:"model_used" json:"model_used"`
 	Provider         string    `db:"provider" json:"provider"`
 	ProviderKeyAlias string    `db:"provider_key_alias" json:"provider_key_alias"`
-	PromptTokens     int       `db:"prompt_tokens" json:"prompt_tokens"`
-	CompletionTokens int       `db:"completion_tokens" json:"completion_tokens"`
-	ReasoningTokens  int       `db:"reasoning_tokens" json:"reasoning_tokens"`
-	TotalTokens      int       `db:"total_tokens" json:"total_tokens"`
-	CostUSD          float64   `db:"cost_usd" json:"cost_usd"`
+	PromptTokens           int       `db:"prompt_tokens" json:"prompt_tokens"`
+	CompletionTokens       int       `db:"completion_tokens" json:"completion_tokens"`
+	ReasoningTokens        int       `db:"reasoning_tokens" json:"reasoning_tokens"`
+	CacheReadTokens        int       `db:"cache_read_tokens" json:"cache_read_tokens"`
+	TotalTokens            int       `db:"total_tokens" json:"total_tokens"`
+	PromptUnitPriceUSD     float64   `db:"prompt_unit_price_usd" json:"prompt_unit_price_usd"`
+	CacheUnitPriceUSD      float64   `db:"cache_unit_price_usd" json:"cache_unit_price_usd"`
+	CompletionUnitPriceUSD float64   `db:"completion_unit_price_usd" json:"completion_unit_price_usd"`
+	CostUSD                float64   `db:"cost_usd" json:"cost_usd"`
 	CostCNY          float64   `db:"cost_cny" json:"cost_cny"`
 	FxRate           float64   `db:"fx_rate" json:"fx_rate"`
 	LatencyMS        int       `db:"latency_ms" json:"latency_ms"`
