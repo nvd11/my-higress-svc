@@ -15,7 +15,9 @@ metadata:
     konghq.com/connect-timeout: "60000"
 spec:
   parentRefs:
-    - name: kong-main-gateway
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: kong-main-gateway
       namespace: default
   hostnames:
     - higress.jppwl.asia
@@ -29,6 +31,8 @@ spec:
             type: PathPrefix
             value: /health
       backendRefs:
-        - name: higress-gateway
+        - group: ""
+          kind: Service
+          name: higress-gateway
           port: 8080
           weight: 100
