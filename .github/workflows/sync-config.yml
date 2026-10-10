@@ -11,63 +11,42 @@ on:
   workflow_dispatch:
 
 jobs:
-  sync-config:
-    name: Sync config.yaml to my-argocd-manifests
+  dispatch-config:
+    name: Dispatch config.yaml update to my-argocd-manifests
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
         uses: actions/checkout@v4
 
-      - name: Clone my-argocd-manifests repository
+      - name: Send repository dispatch to my-argocd-manifests
         env:
           DISPATCH_TOKEN: ${{ secrets.ARGOCD_MANIFESTS_DISPATCH_TOKEN }}
         run: |
           set -euo pipefail
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git clone "https://x-access-token:${DISPATCH_TOKEN}@github.com/nvd11/my-argocd-manifests.git" argocd-repo
 
-      - name: Update config.yaml in higress-gemini-adapter-app.yaml
-        run: |
-          set -euo pipefail
-          TARGET_FILE="argocd-repo/argocd-apps/higress-gemini-adapter-app.yaml"
-          
-          # 提取当前仓库最新的 config.yaml 内容并加上 14 个空格的标准缩进
-          INDENTED_CONFIG="$(sed 's/^/              /' config.yaml)"
-
-          python3 - <<EOF
-          import re
-
-          with open("$TARGET_FILE", "r", encoding="utf-8") as f:
-              content = f.read()
-
-          with open("config.yaml", "r", encoding="utf-8") as cf:
-              raw_cfg = cf.read()
-
-          # 给每一行增加 14 个空格缩进以匹配 helm values 内部嵌套
-          indented = "\n".join("              " + line if line.strip() else "" for line in raw_cfg.splitlines())
-
-          # 替换 data 下的 config.yaml: | 块
-          pattern = r"(configMap:\s+enabled:\s+true\s+name:\s+higress-gemini-adapter-config\s+data:\s+config\.yaml:\s*\|\n)(?:[ \t]*\n| {14}[^\n]*\n)*"
-          replacement = r"\g<1>" + indented + "\n"
-
-          new_content = re.sub(pattern, replacement, content)
-
-          with open("$TARGET_FILE", "w", encoding="utf-8") as f:
-              f.write(new_content)
-
-          print("✅ Successfully updated config.yaml in", "$TARGET_FILE")
-          EOF
-
-      - name: Commit and push changes
-        run: |
-          set -euo pipefail
-          cd argocd-repo
-          if git diff --quiet; then
-            echo "ℹ️ No configuration changes detected, nothing to commit."
-          else
-            git add argocd-apps/higress-gemini-adapter-app.yaml
-            git commit -m "feat(gitops): sync config.yaml from my-higress-svc (fast zero-build update)"
-            git push origin main
-            echo "🚀 Pushed updated config.yaml to my-argocd-manifests successfully!"
+          if [[ -z "$DISPATCH_TOKEN" ]]; then
+            echo "❌ ARGOCD_MANIFESTS_DISPATCH_TOKEN is missing or empty" >&2
+            exit 1
           fi
+
+          CONFIG_B64="$(base64 -w 0 config.yaml)"
+
+          response_file="$(mktemp)"
+          http_status="$(curl --silent --show-error --output "$response_file" \
+            --write-out '%{http_code}' \
+            --request POST \
+            --url https://api.github.com/repos/nvd11/my-argocd-manifests/dispatches \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $DISPATCH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --data "$(jq -n \
+              --arg cfg_b64 "$CONFIG_B64" \
+              '{event_type:"update-adapter-config",client_payload:{config_base64:$cfg_b64}}')")"
+
+          echo "GitOps config dispatch HTTP status: $http_status"
+          if [[ "$http_status" != "204" ]]; then
+            cat "$response_file" >&2
+            exit 1
+          fi
+
+          echo "🚀 Dispatched update-adapter-config to my-argocd-manifests successfully!"
