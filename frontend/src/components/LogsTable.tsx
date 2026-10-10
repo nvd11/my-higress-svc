@@ -268,10 +268,18 @@ export const LogsTable: React.FC<LogsTableProps> = ({
                       )}
                     </td>
                     <td className="py-3 px-4 text-right whitespace-nowrap font-mono font-medium text-slate-800">
-                      {log.total_tokens.toLocaleString()}
-                      <span className="text-[10px] text-slate-400 ml-1">
-                        ({log.prompt_tokens}↑ {log.completion_tokens}↓)
-                      </span>
+                      <div>
+                        {log.total_tokens.toLocaleString()}
+                        <span className="text-[10px] text-slate-400 ml-1">
+                          ({log.prompt_tokens.toLocaleString()}↑ {log.completion_tokens.toLocaleString()}↓)
+                        </span>
+                      </div>
+                      {Boolean(log.cache_read_tokens && log.cache_read_tokens > 0) && (
+                        <div className="text-[10px] text-emerald-600 font-sans font-medium flex items-center justify-end gap-0.5 mt-0.5">
+                          <span>⚡缓存:</span>
+                          <span className="font-mono font-semibold">{log.cache_read_tokens?.toLocaleString()}</span>
+                        </div>
+                      )}
                     </td>
                     <td className="py-3 px-4 text-right whitespace-nowrap font-mono font-semibold text-emerald-600">
                       ¥{log.cost_cny.toFixed(4)}

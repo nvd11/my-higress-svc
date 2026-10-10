@@ -813,17 +813,69 @@ export const PayloadDrawer: React.FC<PayloadDrawerProps> = ({ log, onClose }) =>
                   <span className="text-slate-500 font-medium block">结算汇率 (USD/CNY)</span>
                   <span className="font-mono text-slate-800 font-semibold">{log.fx_rate}</span>
                 </div>
-                <div>
-                  <span className="text-slate-500 font-medium block">Token 消耗明细</span>
-                  <span className="font-mono text-slate-800 font-semibold">
-                    总计 {log.total_tokens} (Prompt: {log.prompt_tokens}, Completion: {log.completion_tokens})
-                  </span>
+                <div className="col-span-2 bg-white p-3 rounded-lg border border-slate-200/80 shadow-2xs space-y-2">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
+                    <span className="text-slate-700 font-semibold flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-blue-500" />
+                      Token 计量与缓存命中拆分
+                    </span>
+                    <span className="font-mono text-slate-800 font-bold">总计 {log.total_tokens.toLocaleString()} Tokens</span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] font-mono">
+                    <div className="bg-slate-50 p-2 rounded">
+                      <span className="text-slate-400 block font-sans text-[10px]">输入 (Prompt)</span>
+                      <span className="text-slate-700 font-semibold">{log.prompt_tokens.toLocaleString()}</span>
+                    </div>
+                    <div className="bg-emerald-50/60 border border-emerald-200/60 p-2 rounded">
+                      <span className="text-emerald-600 block font-sans text-[10px] font-medium">⚡ 缓存读取命中</span>
+                      <span className="text-emerald-700 font-bold">{Boolean(log.cache_read_tokens) ? log.cache_read_tokens?.toLocaleString() : "0"}</span>
+                      {Boolean(log.cache_read_tokens && log.prompt_tokens > 0) && (
+                        <span className="text-[10px] text-emerald-600/80 block mt-0.5">
+                          ({((log.cache_read_tokens! / log.prompt_tokens) * 100).toFixed(1)}% 命中)
+                        </span>
+                      )}
+                    </div>
+                    <div className="bg-slate-50 p-2 rounded">
+                      <span className="text-slate-400 block font-sans text-[10px]">输出 (Completion)</span>
+                      <span className="text-slate-700 font-semibold">{log.completion_tokens.toLocaleString()}</span>
+                    </div>
+                    <div className="bg-slate-50 p-2 rounded">
+                      <span className="text-slate-400 block font-sans text-[10px]">深度思考 (Reasoning)</span>
+                      <span className="text-slate-700 font-semibold">{Boolean(log.reasoning_tokens) ? log.reasoning_tokens?.toLocaleString() : "0"}</span>
+                    </div>
+                  </div>
                 </div>
-                <div>
-                  <span className="text-slate-500 font-medium block">本次扣费 (USD / CNY)</span>
-                  <span className="font-mono text-emerald-600 font-bold">
-                    ¥{log.cost_cny.toFixed(6)} (${log.cost_usd.toFixed(6)})
-                  </span>
+
+                <div className="col-span-2 bg-white p-3 rounded-lg border border-slate-200/80 shadow-2xs space-y-2">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
+                    <span className="text-slate-700 font-semibold flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                      财务结算与阶梯基准单价
+                    </span>
+                    <span className="font-mono text-emerald-600 font-bold">
+                      ¥{log.cost_cny.toFixed(6)} <span className="text-slate-400 font-normal">(${log.cost_usd.toFixed(6)})</span>
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-[11px] font-mono">
+                    <div className="bg-slate-50 p-2 rounded">
+                      <span className="text-slate-400 block font-sans text-[10px]">未缓存输入基准单价</span>
+                      <span className="text-slate-700 font-semibold">
+                        {log.prompt_unit_price_usd !== undefined ? `$${log.prompt_unit_price_usd.toFixed(4)}/1M` : "-"}
+                      </span>
+                    </div>
+                    <div className="bg-emerald-50/60 p-2 rounded border border-emerald-100">
+                      <span className="text-emerald-600 block font-sans text-[10px]">缓存读取优惠单价</span>
+                      <span className="text-emerald-700 font-semibold">
+                        {log.cache_unit_price_usd !== undefined ? `$${log.cache_unit_price_usd.toFixed(4)}/1M` : "-"}
+                      </span>
+                    </div>
+                    <div className="bg-slate-50 p-2 rounded">
+                      <span className="text-slate-400 block font-sans text-[10px]">输出生成基准单价</span>
+                      <span className="text-slate-700 font-semibold">
+                        {log.completion_unit_price_usd !== undefined ? `$${log.completion_unit_price_usd.toFixed(4)}/1M` : "-"}
+                      </span>
+                    </div>
+                  </div>
                 </div>
                 {log.error_msg && (
                   <div className="col-span-2">

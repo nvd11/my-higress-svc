@@ -8,7 +8,12 @@ export interface LogItem {
   provider_key_alias: string;
   prompt_tokens: number;
   completion_tokens: number;
+  reasoning_tokens?: number;
+  cache_read_tokens?: number;
   total_tokens: number;
+  prompt_unit_price_usd?: number;
+  cache_unit_price_usd?: number;
+  completion_unit_price_usd?: number;
   cost_usd: number;
   cost_cny: number;
   fx_rate: number;
