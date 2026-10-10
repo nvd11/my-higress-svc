@@ -24,6 +24,7 @@ WORKDIR /app
 RUN apk add --no-cache ca-certificates tzdata
 
 COPY --from=builder /app/gemini-adapter /app/gemini-adapter
+COPY config.yaml /app/config.yaml
 
 EXPOSE 8080
 
