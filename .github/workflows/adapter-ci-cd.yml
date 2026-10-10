@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "services/gemini-adapter/**"
+      - "!services/gemini-adapter/config.yaml"
       - ".github/workflows/adapter-ci-cd.yml"
     tags:
       - "v*"
