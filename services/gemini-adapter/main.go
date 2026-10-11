@@ -310,7 +310,7 @@ func sanitizeGoogleTurns(contents []GoogleContent) []GoogleContent {
 					for _, fr := range funcResponses {
 						respBytes, _ := json.Marshal(fr.Response)
 						textParts = append(textParts, GooglePart{
-							Text: fmt.Sprintf("[Previous tool execution result for %s]: %s", fr.Name, string(respBytes)),
+							Text: fmt.Sprintf("Tool result for %s:\n%s", fr.Name, string(respBytes)),
 						})
 					}
 					current.Parts = textParts
@@ -325,7 +325,7 @@ func sanitizeGoogleTurns(contents []GoogleContent) []GoogleContent {
 						} else {
 							respBytes, _ := json.Marshal(fr.Response)
 							textParts = append(textParts, GooglePart{
-								Text: fmt.Sprintf("[Previous tool execution result for %s]: %s", fr.Name, string(respBytes)),
+								Text: fmt.Sprintf("Tool result for %s:\n%s", fr.Name, string(respBytes)),
 							})
 						}
 					}
@@ -449,7 +449,7 @@ func sanitizeGoogleTurns(contents []GoogleContent) []GoogleContent {
 						if p.FunctionResponse != nil {
 							rb, _ := json.Marshal(p.FunctionResponse.Response)
 							safeParts = append(safeParts, GooglePart{
-								Text: fmt.Sprintf("[Previous tool execution result for %s]: %s", p.FunctionResponse.Name, string(rb)),
+								Text: fmt.Sprintf("Tool result for %s:\n%s", p.FunctionResponse.Name, string(rb)),
 							})
 						} else {
 							safeParts = append(safeParts, p)
@@ -962,14 +962,26 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 		},
 	}
 
-	// 预先建立本轮请求内所有 tool_calls 的 ID -> Name 快速反查表
+	// 预先建立本轮请求内所有 tool_calls 的 ID -> Name 快速反查表与缺失签名调用集合
 	localToolMap := make(map[string]string)
+	missingSigCallIDs := make(map[string]bool)
 	for _, m := range req.Messages {
 		if m.Role == "assistant" {
 			for _, tc := range m.ToolCalls {
 				if tc.ID != "" && tc.Function.Name != "" {
 					localToolMap[tc.ID] = tc.Function.Name
 					callIDToName.Store(tc.ID, tc.Function.Name)
+
+					sig := ""
+					if v, ok := thoughtSigCache.Load(tc.ID); ok {
+						sig = v.(string)
+					}
+					if strings.Contains(sig, "placeholder") || len(sig) < 20 {
+						sig = ""
+					}
+					if sig == "" {
+						missingSigCallIDs[tc.ID] = true
+					}
 				}
 			}
 		}
@@ -1003,16 +1015,10 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 		if msg.Role == "assistant" {
 			parts := []GooglePart{}
 			if contentStr != "" {
-				// 🎯 若历史文本中包含了旧版本残留的 pseudo tool call，将其无缝还原为标准 FunctionCall
+				// 🎯 若历史文本中包含了旧版本残留的 pseudo tool call，将其转化为干净的自然语言描述
 				if fnName, fnArgs, ok := parsePseudoToolCall(contentStr); ok {
-					var args map[string]interface{}
-					_ = json.Unmarshal([]byte(fnArgs), &args)
 					parts = append(parts, GooglePart{
-						FunctionCall: &GoogleFunctionCall{
-							Name: fnName,
-							Args: args,
-							ID:   "call_" + uuid.New().String()[:8],
-						},
+						Text: fmt.Sprintf("I called tool %s with arguments: %s", fnName, fnArgs),
 					})
 				} else {
 					parts = append(parts, GooglePart{Text: contentStr})
@@ -1033,20 +1039,26 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 					sig = ""
 				}
 
-				// 🎯 核心修复: 无论是否有 sig，永远传递真正的 FunctionCall！
-				// Google Gemini 3.8 官方完全接受无 thoughtSignature 的历史 functionCall！
-				// 严禁降级为文本 "[Assistant invoked tool ...]"，防止模型模仿并退化为纯文本输出！
-				gp := GooglePart{
-					FunctionCall: &GoogleFunctionCall{
-						Name: tc.Function.Name,
-						Args: args,
-						ID:   tc.ID,
-					},
-				}
 				if sig != "" {
-					gp.ThoughtSignature = sig
+					// 拥有真实 thoughtSignature，安全作为原生 FunctionCall 发送给 Google
+					parts = append(parts, GooglePart{
+						ThoughtSignature: sig,
+						FunctionCall: &GoogleFunctionCall{
+							Name: tc.Function.Name,
+							Args: args,
+							ID:   tc.ID,
+						},
+					})
+				} else {
+					// 🎯 核心解决: Google Gemini 3.8 校验
+					// "Function call is missing a thought_signature in functionCall parts."
+					// 当丢失精确 thoughtSignature 时（例如 Pod 重启），该次调用与匹配的工具响应必须同步以自然语言呈现，
+					// 彻底终结 Google 对 thought_signature 的强制验签，同时保持历史时序的完美连贯！
+					argsStr := tc.Function.Arguments
+					parts = append(parts, GooglePart{
+						Text: fmt.Sprintf("I called tool %s with arguments: %s", tc.Function.Name, argsStr),
+					})
 				}
-				parts = append(parts, gp)
 			}
 			if len(parts) > 0 {
 				gReq.Contents = append(gReq.Contents, GoogleContent{
@@ -1077,6 +1089,19 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 			}
 			if toolName == "" {
 				toolName = "default_api"
+			}
+
+			// 🎯 若前置的 tool call 丢失了 thoughtSignature 并转为自然语言，此工具响应必须同步以自然语言呈现！
+			if missingSigCallIDs[msg.ToolCallID] {
+				gReq.Contents = append(gReq.Contents, GoogleContent{
+					Role: "user",
+					Parts: []GooglePart{
+						{
+							Text: fmt.Sprintf("Tool result for %s:\n%s", toolName, contentStr),
+						},
+					},
+				})
+				continue
 			}
 
 			gReq.Contents = append(gReq.Contents, GoogleContent{
