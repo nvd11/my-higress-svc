@@ -480,7 +480,7 @@ func cleanGeminiSchema(schema interface{}) interface{} {
 				continue
 			}
 			// 过滤掉 Google 不识别的元关键字
-			if trimmedKey == "$schema" || trimmedKey == "$id" || trimmedKey == "$defs" || trimmedKey == "definitions" || trimmedKey == "title" || trimmedKey == "additionalProperties" || trimmedKey == "default" {
+			if trimmedKey == "$schema" || trimmedKey == "$id" || trimmedKey == "$defs" || trimmedKey == "definitions" || trimmedKey == "title" || trimmedKey == "additionalProperties" || trimmedKey == "patternProperties" || trimmedKey == "default" {
 				continue
 			}
 			// 将 exclusiveMinimum/exclusiveMaximum 转为 Google 支持的 minimum/maximum
