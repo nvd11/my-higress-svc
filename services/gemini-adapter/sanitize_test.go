@@ -126,3 +126,72 @@ func TestCompactionZeroTools_ModeNone(t *testing.T) {
 		t.Fatalf("expected mode NONE when tools is empty, got %+v", gReq.ToolConfig)
 	}
 }
+
+func TestSanitizeGoogleTurns_ModelFirstTurn(t *testing.T) {
+	// 测试：如果输入的第一轮就是 model（历史截断），必须自动在最前方插入 user turn
+	input := []GoogleContent{
+		{
+			Role:  "model",
+			Parts: []GooglePart{{Text: "I am an assistant"}},
+		},
+		{
+			Role:  "user",
+			Parts: []GooglePart{{Text: "Hi"}},
+		},
+	}
+	sanitized := sanitizeGoogleTurns(input)
+	if len(sanitized) < 2 {
+		t.Fatalf("expected at least 2 turns, got %d", len(sanitized))
+	}
+	if sanitized[0].Role != "user" {
+		t.Fatalf("expected first turn to be user, got %s", sanitized[0].Role)
+	}
+}
+
+func TestSanitizeGoogleTurns_MixedTextAndFunctionResponse(t *testing.T) {
+	// 测试：同一个 user turn 里混杂了 Text 和 FunctionResponse（例如 OpenCode 伴随提示），且前置有 FunctionCall
+	input := []GoogleContent{
+		{
+			Role:  "user",
+			Parts: []GooglePart{{Text: "list files"}},
+		},
+		{
+			Role: "model",
+			Parts: []GooglePart{
+				{
+					FunctionCall: &GoogleFunctionCall{
+						Name: "glob",
+						Args: map[string]interface{}{"pattern": "*"},
+					},
+				},
+			},
+		},
+		{
+			Role: "user",
+			Parts: []GooglePart{
+				{Text: "here are the results:"},
+				{
+					FunctionResponse: &GoogleFunctionResponse{
+						Name:     "glob",
+						Response: map[string]interface{}{"files": []string{"a.go"}},
+					},
+				},
+			},
+		},
+	}
+
+	sanitized := sanitizeGoogleTurns(input)
+	// 验证：Google 会要求 model(call) 紧随包含 functionResponse 的 turn
+	for i := 0; i < len(sanitized); i++ {
+		if sanitized[i].Role == "user" {
+			for _, p := range sanitized[i].Parts {
+				if p.FunctionResponse != nil {
+					// 必须前一个是 model，且 model 里有匹配的 call
+					if i == 0 || sanitized[i-1].Role != "model" {
+						t.Fatalf("turn %d has functionResponse but previous turn is not model", i)
+					}
+				}
+			}
+		}
+	}
+}
