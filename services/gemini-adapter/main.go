@@ -1205,6 +1205,16 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 				continue
 			}
 
+			// 持续更新 Token 统计（Google Gemini 流式中 UsageMetadata 可能出现在最后的统计帧中）
+			if gResp.UsageMetadata != nil {
+				promptTokens = gResp.UsageMetadata.PromptTokenCount
+				completionTokens = gResp.UsageMetadata.CandidatesTokenCount
+				reasoningTokens = gResp.UsageMetadata.ThoughtsTokenCount
+				if gResp.UsageMetadata.CachedContentTokenCount > 0 {
+					cacheReadTokens = gResp.UsageMetadata.CachedContentTokenCount
+				}
+			}
+
 			// 检查安全拦截
 			if gResp.PromptFeedback != nil && gResp.PromptFeedback.BlockReason != "" {
 				errMsg := fmt.Sprintf("[Google AI Studio safety filter blocked request: %s]", gResp.PromptFeedback.BlockReason)
@@ -1364,19 +1374,13 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 				}
 
 				usage := gin.H{}
-				if gResp.UsageMetadata != nil {
-					promptTokens = gResp.UsageMetadata.PromptTokenCount
-					completionTokens = gResp.UsageMetadata.CandidatesTokenCount
-					reasoningTokens = gResp.UsageMetadata.ThoughtsTokenCount
-					if gResp.UsageMetadata.CachedContentTokenCount > 0 {
-						cacheReadTokens = gResp.UsageMetadata.CachedContentTokenCount
-					}
+				if promptTokens > 0 || completionTokens > 0 || reasoningTokens > 0 {
 					usage = gin.H{
-						"prompt_tokens":     gResp.UsageMetadata.PromptTokenCount,
-						"completion_tokens": gResp.UsageMetadata.CandidatesTokenCount,
-						"total_tokens":      gResp.UsageMetadata.TotalTokenCount,
+						"prompt_tokens":     promptTokens,
+						"completion_tokens": completionTokens,
+						"total_tokens":      promptTokens + completionTokens,
 						"completion_tokens_details": gin.H{
-							"reasoning_tokens": gResp.UsageMetadata.ThoughtsTokenCount,
+							"reasoning_tokens": reasoningTokens,
 						},
 					}
 				}
