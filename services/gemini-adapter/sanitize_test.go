@@ -210,10 +210,16 @@ func TestParsePseudoToolCall(t *testing.T) {
 		t.Fatalf("failed parsing s2: fn=%s, args=%s, ok=%v", fn, args, ok)
 	}
 
-	s3 := `Just normal conversational text from model.`
-	_, _, ok = parsePseudoToolCall(s3)
+	s3 := `I called tool grep with arguments: {"path":"/home/gateman/test","pattern":"test"}`
+	fn, args, ok = parsePseudoToolCall(s3)
+	if !ok || fn != "grep" || args != `{"path":"/home/gateman/test","pattern":"test"}` {
+		t.Fatalf("failed parsing s3: fn=%s, args=%s, ok=%v", fn, args, ok)
+	}
+
+	s4 := `Just normal conversational text from model.`
+	_, _, ok = parsePseudoToolCall(s4)
 	if ok {
-		t.Fatalf("s3 should not match pseudo tool call")
+		t.Fatalf("s4 should not match pseudo tool call")
 	}
 }
 
