@@ -91,9 +91,32 @@ func RegisterLogsRoutes(rg *gin.RouterGroup, vlogsClient *vlogs.Client) {
 			keyAlias = c.Query("key_alias")
 		}
 		searchKeyword := c.Query("search")
+		dateStr := c.Query("date")
+		startDateStr := c.Query("start_date")
+		endDateStr := c.Query("end_date")
 
 		whereClauses := []string{"1=1"}
 		args := []interface{}{}
+
+		// 日期过滤条件
+		if startDateStr != "" && endDateStr != "" {
+			if startDateStr == endDateStr {
+				whereClauses = append(whereClauses, "DATE(created_at) = ?")
+				args = append(args, startDateStr)
+			} else {
+				whereClauses = append(whereClauses, "DATE(created_at) >= ? AND DATE(created_at) <= ?")
+				args = append(args, startDateStr, endDateStr)
+			}
+		} else if dateStr != "" {
+			whereClauses = append(whereClauses, "DATE(created_at) = ?")
+			args = append(args, dateStr)
+		} else if startDateStr != "" {
+			whereClauses = append(whereClauses, "DATE(created_at) >= ?")
+			args = append(args, startDateStr)
+		} else if endDateStr != "" {
+			whereClauses = append(whereClauses, "DATE(created_at) <= ?")
+			args = append(args, endDateStr)
+		}
 
 		// 1. 若携带搜索关键词，先向 VictoriaLogs 检索匹配的 request_id 列表
 		if searchKeyword != "" && vlogsClient != nil {

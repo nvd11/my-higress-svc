@@ -69,6 +69,7 @@ export const App: React.FC = () => {
       const params = new URLSearchParams({
         page: page.toString(),
         page_size: pageSize.toString(),
+        date: selectedDate,
         start_date: selectedDate,
         end_date: selectedDate,
       });
