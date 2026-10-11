@@ -216,3 +216,42 @@ func TestParsePseudoToolCall(t *testing.T) {
 		t.Fatalf("s3 should not match pseudo tool call")
 	}
 }
+
+func TestMissingSigPairwiseDegrade(t *testing.T) {
+	// 验证：当缺失 thought_signature 时，成对降级为文本后的时序通过 sanitizeGoogleTurns 且无孤儿 FunctionResponse
+	input := []GoogleContent{
+		{
+			Role:  "user",
+			Parts: []GooglePart{{Text: "check system"}},
+		},
+		{
+			Role:  "model",
+			Parts: []GooglePart{{Text: "I called tool default_api:bash with arguments: {\"command\":\"uptime\"}"}},
+		},
+		{
+			Role:  "user",
+			Parts: []GooglePart{{Text: "Tool result for default_api:bash:\n14:20:00 up 10 days"}},
+		},
+		{
+			Role:  "user",
+			Parts: []GooglePart{{Text: "what is the uptime?"}},
+		},
+	}
+
+	sanitized := sanitizeGoogleTurns(input)
+	if len(sanitized) != 3 {
+		t.Fatalf("expected 3 turns after user merge, got %d", len(sanitized))
+	}
+	if sanitized[0].Role != "user" || sanitized[1].Role != "model" || sanitized[2].Role != "user" {
+		t.Fatalf("expected user -> model -> user alternating turns, got: %v, %v, %v",
+			sanitized[0].Role, sanitized[1].Role, sanitized[2].Role)
+	}
+	// 必须无任何孤儿 FunctionResponse
+	for _, c := range sanitized {
+		for _, p := range c.Parts {
+			if p.FunctionResponse != nil {
+				t.Fatalf("expected no FunctionResponse in degraded turn")
+			}
+		}
+	}
+}
