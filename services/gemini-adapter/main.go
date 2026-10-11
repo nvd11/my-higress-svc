@@ -1895,6 +1895,10 @@ func handleGeminiNativeProxy(c *gin.Context, defaultAPIKey string) {
 			{"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
 			{"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"},
 		}
+		// 递归清洗 tools 中的 JSON Schema (兼容 Gemini 原生接口如 OpenClaw / Google SDK 调用)
+		if toolsRaw, ok := bodyMap["tools"]; ok {
+			bodyMap["tools"] = cleanGeminiSchema(toolsRaw)
+		}
 		// 递归剥离占位符
 		cleanedBody := stripThoughtSignaturePlaceholder(bodyMap)
 		rawBody, _ = json.Marshal(cleanedBody)
