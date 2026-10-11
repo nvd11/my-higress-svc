@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,20 @@ import (
 
 var thoughtSigCache sync.Map // map[string]string: callID / toolName -> thoughtSignature
 var callIDToName sync.Map    // map[string]string: callID -> functionName
+
+var pseudoToolCallRegex = regexp.MustCompile(`(?s)\[?Assistant invoked tool (\w+) with args:\s*(\{.*?\})\]?`)
+
+// parsePseudoToolCall 解析可能被历史提示词污染的伪工具调用纯文本
+func parsePseudoToolCall(text string) (string, string, bool) {
+	m := pseudoToolCallRegex.FindStringSubmatch(text)
+	if len(m) == 3 {
+		var js map[string]interface{}
+		if err := json.Unmarshal([]byte(m[2]), &js); err == nil {
+			return m[1], strings.TrimSpace(m[2]), true
+		}
+	}
+	return "", "", false
+}
 
 func main() {
 	// 加载模型与路由配置 (支持 config.yaml 或环境变量)
@@ -988,7 +1003,20 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 		if msg.Role == "assistant" {
 			parts := []GooglePart{}
 			if contentStr != "" {
-				parts = append(parts, GooglePart{Text: contentStr})
+				// 🎯 若历史文本中包含了旧版本残留的 pseudo tool call，将其无缝还原为标准 FunctionCall
+				if fnName, fnArgs, ok := parsePseudoToolCall(contentStr); ok {
+					var args map[string]interface{}
+					_ = json.Unmarshal([]byte(fnArgs), &args)
+					parts = append(parts, GooglePart{
+						FunctionCall: &GoogleFunctionCall{
+							Name: fnName,
+							Args: args,
+							ID:   "call_" + uuid.New().String()[:8],
+						},
+					})
+				} else {
+					parts = append(parts, GooglePart{Text: contentStr})
+				}
 			}
 			for _, tc := range msg.ToolCalls {
 				var args map[string]interface{}
@@ -1005,27 +1033,20 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 					sig = ""
 				}
 
-				// 🎯 处理 thoughtSignature 与 Google 3.8 校验:
-				// Google 对历史 tool_call 的 thought_signature 有服务端加密验签 (HMAC),
-				// 伪造/串用占位符会直接触发 "Corrupted thought signature."
-				// 若由于历史压缩/客户端未透传导致没有该 callID 的真实精确签名，
-				// 最佳做法：将该历史 tool_call 转译为纯文本 assistant 描述，
-				// Google 100% 当作正常对话历史接收，完全免除验签，确保会话永远平稳！
-				if sig == "" {
-					argsStr := tc.Function.Arguments
-					parts = append(parts, GooglePart{
-						Text: fmt.Sprintf("[Assistant invoked tool %s with args: %s]", tc.Function.Name, argsStr),
-					})
-				} else {
-					parts = append(parts, GooglePart{
-						ThoughtSignature: sig,
-						FunctionCall: &GoogleFunctionCall{
-							Name: tc.Function.Name,
-							Args: args,
-							ID:   tc.ID,
-						},
-					})
+				// 🎯 核心修复: 无论是否有 sig，永远传递真正的 FunctionCall！
+				// Google Gemini 3.8 官方完全接受无 thoughtSignature 的历史 functionCall！
+				// 严禁降级为文本 "[Assistant invoked tool ...]"，防止模型模仿并退化为纯文本输出！
+				gp := GooglePart{
+					FunctionCall: &GoogleFunctionCall{
+						Name: tc.Function.Name,
+						Args: args,
+						ID:   tc.ID,
+					},
 				}
+				if sig != "" {
+					gp.ThoughtSignature = sig
+				}
+				parts = append(parts, gp)
 			}
 			if len(parts) > 0 {
 				gReq.Contents = append(gReq.Contents, GoogleContent{
@@ -1261,6 +1282,53 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 			}
 			for _, part := range cand.Content.Parts {
 				if part.Text != "" {
+					// 🎯 核心防幻觉拦截: 若 Gemini 模仿被污染的旧上下文输出了 pseudo tool call 文本，立即升级为真 ToolCall 派发！
+					if fnName, fnArgs, ok := parsePseudoToolCall(part.Text); ok && len(req.Tools) > 0 {
+						hasToolCalls = true
+						callID := "call_" + uuid.New().String()[:8]
+						callIDToName.Store(callID, fnName)
+						tcObj := gin.H{
+							"id":   callID,
+							"type": "function",
+							"function": gin.H{
+								"name":      fnName,
+								"arguments": fnArgs,
+							},
+						}
+						streamToolCalls = append(streamToolCalls, tcObj)
+						chunk := gin.H{
+							"id":      chatCmplID,
+							"object":  "chat.completion.chunk",
+							"created": created,
+							"model":   model,
+							"choices": []gin.H{
+								{
+									"index": 0,
+									"delta": gin.H{
+										"tool_calls": []gin.H{
+											{
+												"index": 0,
+												"id":    callID,
+												"type":  "function",
+												"function": gin.H{
+													"name":      fnName,
+													"arguments": fnArgs,
+												},
+											},
+										},
+									},
+									"finish_reason": nil,
+								},
+							},
+						}
+						chunkBytes, _ := json.Marshal(chunk)
+						_, _ = c.Writer.Write([]byte(fmt.Sprintf("data: %s\n\n", string(chunkBytes))))
+						if flusher != nil {
+							flusher.Flush()
+						}
+						continue
+					}
+
 					fullResponseText += part.Text
 					chunk := gin.H{
 						"id":      chatCmplID,
@@ -1459,6 +1527,19 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 
 	for _, part := range cand.Content.Parts {
 		if part.Text != "" {
+			if fnName, fnArgs, ok := parsePseudoToolCall(part.Text); ok && len(req.Tools) > 0 {
+				callID := "call_" + uuid.New().String()[:8]
+				callIDToName.Store(callID, fnName)
+				outToolCalls = append(outToolCalls, gin.H{
+					"id":   callID,
+					"type": "function",
+					"function": gin.H{
+						"name":      fnName,
+						"arguments": fnArgs,
+					},
+				})
+				continue
+			}
 			outContent += part.Text
 		}
 		if part.FunctionCall != nil {

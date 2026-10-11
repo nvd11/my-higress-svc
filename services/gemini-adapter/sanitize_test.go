@@ -195,3 +195,24 @@ func TestSanitizeGoogleTurns_MixedTextAndFunctionResponse(t *testing.T) {
 		}
 	}
 }
+
+func TestParsePseudoToolCall(t *testing.T) {
+	// 验证：能够正确解析模型幻觉出来的伪工具调用字符串
+	s1 := `[Assistant invoked tool bash with args: {"command":"echo hello"}]`
+	fn, args, ok := parsePseudoToolCall(s1)
+	if !ok || fn != "bash" || args != `{"command":"echo hello"}` {
+		t.Fatalf("failed parsing s1: fn=%s, args=%s, ok=%v", fn, args, ok)
+	}
+
+	s2 := `Assistant invoked tool bash with args: {"command":"ls -la"}`
+	fn, args, ok = parsePseudoToolCall(s2)
+	if !ok || fn != "bash" || args != `{"command":"ls -la"}` {
+		t.Fatalf("failed parsing s2: fn=%s, args=%s, ok=%v", fn, args, ok)
+	}
+
+	s3 := `Just normal conversational text from model.`
+	_, _, ok = parsePseudoToolCall(s3)
+	if ok {
+		t.Fatalf("s3 should not match pseudo tool call")
+	}
+}
