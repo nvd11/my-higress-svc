@@ -161,6 +161,7 @@ type GoogleContent struct {
 
 type GooglePart struct {
 	Text             string                  `json:"text,omitempty"`
+	Thought          bool                    `json:"thought,omitempty"`
 	ThoughtSignature string                  `json:"thoughtSignature,omitempty"`
 	FunctionCall     *GoogleFunctionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *GoogleFunctionResponse `json:"functionResponse,omitempty"`
@@ -229,6 +230,7 @@ type GoogleUsage struct {
 	CandidatesTokenCount    int `json:"candidatesTokenCount"`
 	TotalTokenCount         int `json:"totalTokenCount"`
 	CachedContentTokenCount int `json:"cachedContentTokenCount,omitempty"`
+	ThoughtsTokenCount      int `json:"thoughtsTokenCount,omitempty"`
 }
 
 // sanitizeGoogleTurns 解决 Google Gemini 原生对话时序强校验限制:
@@ -402,13 +404,13 @@ func cleanGeminiSchema(schema interface{}) interface{} {
 }
 
 // reportAuditLogAsync 异步向 dashboard-backend 上报审计与计量日志
-func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promptTokens, completionTokens, cacheReadTokens int, latencyMs int, statusCode int, promptText, respText string, errText *string) {
+func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promptTokens, completionTokens, reasoningTokens, cacheReadTokens int, latencyMs int, statusCode int, promptText, respText string, errText *string) {
 	backendURL := os.Getenv("AUDIT_BACKEND_URL")
 	if backendURL == "" {
 		backendURL = "http://higress-dashboard-backend.higress-system.svc.cluster.local:4000/api/v1/internal/audit-log"
 	}
 
-	log.Printf("🚀 Invoked reportAuditLogAsync: reqID=%s, authHeader=%s, promptTokens=%d, compTokens=%d, cacheTokens=%d", reqID, rawAuthHeader, promptTokens, completionTokens, cacheReadTokens)
+	log.Printf("🚀 Invoked reportAuditLogAsync: reqID=%s, authHeader=%s, promptTokens=%d, compTokens=%d, reasoningTokens=%d, cacheTokens=%d", reqID, rawAuthHeader, promptTokens, completionTokens, reasoningTokens, cacheReadTokens)
 
 	go func() {
 		defer func() {
@@ -483,7 +485,7 @@ func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promp
 			"provider_key_alias":         providerKeyAlias,
 			"prompt_tokens":              promptTokens,
 			"completion_tokens":          completionTokens,
-			"reasoning_tokens":           0,
+			"reasoning_tokens":           reasoningTokens,
 			"cache_read_tokens":          cacheReadTokens,
 			"total_tokens":               totalTokens,
 			"prompt_unit_price_usd":      promptPrice,
@@ -621,6 +623,7 @@ func handleOpenAIUpstreamProxy(c *gin.Context, req OpenAIChatRequest, mCfg *Mode
 		fullResponseText := ""
 		promptTokens := 0
 		completionTokens := 0
+		reasoningTokens := 0
 		cacheReadTokens := 0
 		var streamToolCalls []gin.H
 
@@ -650,6 +653,11 @@ func handleOpenAIUpstreamProxy(c *gin.Context, req OpenAIChatRequest, mCfg *Mode
 					}
 					if ct, ok := usage["completion_tokens"].(float64); ok {
 						completionTokens = int(ct)
+					}
+					if ctd, ok := usage["completion_tokens_details"].(map[string]interface{}); ok {
+						if rt, ok := ctd["reasoning_tokens"].(float64); ok {
+							reasoningTokens = int(rt)
+						}
 					}
 					if ptd, ok := usage["prompt_tokens_details"].(map[string]interface{}); ok {
 						if ct, ok := ptd["cached_tokens"].(float64); ok {
@@ -682,7 +690,7 @@ func handleOpenAIUpstreamProxy(c *gin.Context, req OpenAIChatRequest, mCfg *Mode
 			"tool_calls": streamToolCalls,
 		}
 		respJSONBytes, _ := json.Marshal(respMap)
-		reportAuditLogAsync(chatCmplID, rawAuthHeader, req.Model, actualUsedModel, promptTokens, completionTokens, cacheReadTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
+		reportAuditLogAsync(chatCmplID, rawAuthHeader, req.Model, actualUsedModel, promptTokens, completionTokens, reasoningTokens, cacheReadTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
 		return
 	}
 
@@ -704,6 +712,7 @@ func handleOpenAIUpstreamProxy(c *gin.Context, req OpenAIChatRequest, mCfg *Mode
 
 	pTokens := 0
 	cTokens := 0
+	rTokens := 0
 	cacheTokens := 0
 	replyText := ""
 	var outToolCalls []gin.H
@@ -715,6 +724,11 @@ func handleOpenAIUpstreamProxy(c *gin.Context, req OpenAIChatRequest, mCfg *Mode
 			}
 			if ct, ok := usage["completion_tokens"].(float64); ok {
 				cTokens = int(ct)
+			}
+			if ctd, ok := usage["completion_tokens_details"].(map[string]interface{}); ok {
+				if rt, ok := ctd["reasoning_tokens"].(float64); ok {
+					rTokens = int(rt)
+				}
 			}
 			if ptd, ok := usage["prompt_tokens_details"].(map[string]interface{}); ok {
 				if ct, ok := ptd["cached_tokens"].(float64); ok {
@@ -746,7 +760,7 @@ func handleOpenAIUpstreamProxy(c *gin.Context, req OpenAIChatRequest, mCfg *Mode
 		"tool_calls": outToolCalls,
 	}
 	respJSONBytes, _ := json.Marshal(respMap)
-	reportAuditLogAsync(chatCmplID, rawAuthHeader, req.Model, actualUsedModel, pTokens, cTokens, cacheTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
+	reportAuditLogAsync(chatCmplID, rawAuthHeader, req.Model, actualUsedModel, pTokens, cTokens, rTokens, cacheTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
 }
 
 // -----------------------------------------------------------------------------
@@ -1088,6 +1102,7 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 		fullResponseText := ""
 		promptTokens := 0
 		completionTokens := 0
+		reasoningTokens := 0
 		cacheReadTokens := 0
 
 		for scanner.Scan() {
@@ -1264,6 +1279,7 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 				if gResp.UsageMetadata != nil {
 					promptTokens = gResp.UsageMetadata.PromptTokenCount
 					completionTokens = gResp.UsageMetadata.CandidatesTokenCount
+					reasoningTokens = gResp.UsageMetadata.ThoughtsTokenCount
 					if gResp.UsageMetadata.CachedContentTokenCount > 0 {
 						cacheReadTokens = gResp.UsageMetadata.CachedContentTokenCount
 					}
@@ -1271,6 +1287,9 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 						"prompt_tokens":     gResp.UsageMetadata.PromptTokenCount,
 						"completion_tokens": gResp.UsageMetadata.CandidatesTokenCount,
 						"total_tokens":      gResp.UsageMetadata.TotalTokenCount,
+						"completion_tokens_details": gin.H{
+							"reasoning_tokens": gResp.UsageMetadata.ThoughtsTokenCount,
+						},
 					}
 				}
 
@@ -1308,7 +1327,7 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 			"tool_calls": streamToolCalls,
 		}
 		respJSONBytes, _ := json.Marshal(respMap)
-		reportAuditLogAsync(chatCmplID, rawAuthHeader, model, realModel, promptTokens, completionTokens, cacheReadTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
+		reportAuditLogAsync(chatCmplID, rawAuthHeader, model, realModel, promptTokens, completionTokens, reasoningTokens, cacheReadTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
 		return
 	}
 
@@ -1415,6 +1434,9 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 			"prompt_tokens":     gResp.UsageMetadata.PromptTokenCount,
 			"completion_tokens": gResp.UsageMetadata.CandidatesTokenCount,
 			"total_tokens":      gResp.UsageMetadata.TotalTokenCount,
+			"completion_tokens_details": gin.H{
+				"reasoning_tokens": gResp.UsageMetadata.ThoughtsTokenCount,
+			},
 		}
 	}
 
@@ -1436,10 +1458,12 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 	// 异步上报审计日志至 dashboard-backend
 	pTokens := 0
 	cTokens := 0
+	rTokens := 0
 	cacheTokens := 0
 	if gResp.UsageMetadata != nil {
 		pTokens = gResp.UsageMetadata.PromptTokenCount
 		cTokens = gResp.UsageMetadata.CandidatesTokenCount
+		rTokens = gResp.UsageMetadata.ThoughtsTokenCount
 		if gResp.UsageMetadata.CachedContentTokenCount > 0 {
 			cacheTokens = gResp.UsageMetadata.CachedContentTokenCount
 		}
@@ -1450,7 +1474,7 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 		"tool_calls": outToolCalls,
 	}
 	respJSONBytes, _ := json.Marshal(respMap)
-	reportAuditLogAsync(chatCmplID, rawAuthHeader, model, realModel, pTokens, cTokens, cacheTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
+	reportAuditLogAsync(chatCmplID, rawAuthHeader, model, realModel, pTokens, cTokens, rTokens, cacheTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
 }
 
 // stripThoughtSignaturePlaceholder 递归清洗客户端注入的非法伪造签名 (如 thought_signature_placeholder)
