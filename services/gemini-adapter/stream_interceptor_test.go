@@ -89,6 +89,25 @@ func TestExtractBalancedJSON(t *testing.T) {
 	}
 }
 
+// TestParsePseudoToolCallMultilineBashWithLiteralNewlines 验证包含字面量换行符的多行 bash/curl 命令也能被完美解析
+func TestParsePseudoToolCallMultilineBashWithLiteralNewlines(t *testing.T) {
+	raw := "I executed `bash` with input: {\"command\":\"curl -s -X POST \\\"https://higress.jppwl.asia/v1/chat/completions\\\" \\\\\n  -H \\\"Authorization: Bearer sk-alice-higress-20261011-888888\\\" \\\\\n  -H \\\"Content-Type: application/json\\\" \\\\\n  -d '{\\n    \\\"model\\\": \\\"gemini-3.8-flash\\\",\\n    \\\"messages\\\": [{\\\"role\\\":\\\"user\\\",\\\"content\\\":\\\"hi\\\"}]\\n  }'\"}"
+
+	name, args, ok := parsePseudoToolCall(raw)
+	if !ok || name != "bash" {
+		t.Fatalf("failed parsing multiline bash command: name=%s, ok=%v", name, ok)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(args), &parsed); err != nil {
+		t.Fatalf("args is not valid JSON: %v", err)
+	}
+	cmd, _ := parsed["command"].(string)
+	if !strings.Contains(cmd, "curl -s -X POST") || !strings.Contains(cmd, "gemini-3.8-flash") {
+		t.Fatalf("unexpected parsed command: %s", cmd)
+	}
+}
+
 // TestStreamBufferFragmentedSimulation 模拟流式分片以极碎 Token 片段到达时，流式缓冲区的拦截与组装行为
 func TestStreamBufferFragmentedSimulation(t *testing.T) {
 	// 模拟流式依次吐出的 Token 片段
