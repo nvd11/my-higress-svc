@@ -115,12 +115,15 @@ export const LogsTable: React.FC<LogsTableProps> = ({
   const formatTime = (timeStr: string) => {
     try {
       const d = new Date(timeStr);
-      return d.toLocaleTimeString("zh-CN", {
+      const month = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      const time = d.toLocaleTimeString("zh-CN", {
         hour12: false,
         hour: "2-digit",
         minute: "2-digit",
         second: "2-digit",
       });
+      return `${month}-${day} ${time}`;
     } catch {
       return timeStr;
     }
