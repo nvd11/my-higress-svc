@@ -21,7 +21,7 @@ import (
 var thoughtSigCache sync.Map // map[string]string: callID / toolName -> thoughtSignature
 var callIDToName sync.Map    // map[string]string: callID -> functionName
 
-var pseudoToolCallRegex = regexp.MustCompile(`(?s)\[?Assistant invoked tool (\w+) with args:\s*(\{.*?\})\]?`)
+var pseudoToolCallRegex = regexp.MustCompile(`(?is)(?:\[?Assistant\s+|I\s+)?(?:invoked|called)\s+tool\s+([\w\:\-]+)\s+with\s+(?:args|arguments):\s*(\{.*?\})\]?`)
 
 // parsePseudoToolCall 解析可能被历史提示词污染的伪工具调用纯文本
 func parsePseudoToolCall(text string) (string, string, bool) {
