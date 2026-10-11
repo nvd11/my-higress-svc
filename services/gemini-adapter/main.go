@@ -592,6 +592,11 @@ func cleanGeminiSchema(schema interface{}) interface{} {
 			if trimmedKey == "$schema" || trimmedKey == "$id" || trimmedKey == "$defs" || trimmedKey == "definitions" || trimmedKey == "title" || trimmedKey == "additionalProperties" || trimmedKey == "patternProperties" || trimmedKey == "default" {
 				continue
 			}
+			// 将 const: X 转为 enum: [X]，因为 Gemini 不支持 const 关键字
+			if trimmedKey == "const" {
+				cleaned["enum"] = []interface{}{val}
+				continue
+			}
 			// 将 exclusiveMinimum/exclusiveMaximum 转为 Google 支持的 minimum/maximum
 			if trimmedKey == "exclusiveMinimum" {
 				cleaned["minimum"] = val
