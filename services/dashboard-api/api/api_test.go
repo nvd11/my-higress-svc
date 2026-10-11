@@ -184,7 +184,7 @@ func TestLogsEndpointParameters(t *testing.T) {
 	r := setupTestEngineWithVLogs(nil)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/v1/logs?model=gemini-3.8-flash&status_code=200&key_alias=cindy&page=1&page_size=20", nil)
+	req, _ := http.NewRequest("GET", "/api/v1/logs?model=gemini-3.8-flash&status_code=200&key_alias=cindy&date=2026-10-12&page=1&page_size=20", nil)
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
