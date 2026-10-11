@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -214,6 +215,12 @@ func TestParsePseudoToolCall(t *testing.T) {
 	fn, args, ok = parsePseudoToolCall(s3)
 	if !ok || fn != "grep" || args != `{"path":"/home/gateman/test","pattern":"test"}` {
 		t.Fatalf("failed parsing s3: fn=%s, args=%s, ok=%v", fn, args, ok)
+	}
+
+	sNested := `I executed edit with input: {"filePath":"services/gemini-adapter/main.go","newString":"if foo == \"bar\" {\n\tcontinue\n}","oldString":"if foo == \"bar\" {\n}"}`
+	fn, args, ok = parsePseudoToolCall(sNested)
+	if !ok || fn != "edit" || !strings.Contains(args, "newString") || !strings.Contains(args, "oldString") {
+		t.Fatalf("failed parsing sNested: fn=%s, args=%s, ok=%v", fn, args, ok)
 	}
 
 	s4 := `Just normal conversational text from model.`

@@ -21,7 +21,46 @@ import (
 var thoughtSigCache sync.Map // map[string]string: callID / toolName -> thoughtSignature
 var callIDToName sync.Map    // map[string]string: callID -> functionName
 
-var pseudoToolCallRegex = regexp.MustCompile("(?is)(?:\\[?Assistant\\s+|I\\s+)?(?:invoked|called|executed)\\s+(?:tool\\s+)?[`'\"]?([\\w\\:\\-]+)[`'\"]?\\s+with\\s+(?:args|arguments|input):\\s*(\\{.*?\\})\\]?")
+var pseudoCallPrefixRegex = regexp.MustCompile("(?is)(?:\\[?Assistant\\s+|I\\s+)?(?:invoked|called|executed)\\s+(?:tool\\s+)?[`'\"]?([\\w\\:\\-]+)[`'\"]?\\s+with\\s+(?:args|arguments|input):\\s*")
+
+// extractBalancedJSON 寻找从 text 开始或从 '{' 开始的有效最外层 JSON 对象，准确跳过字符串内包含的转义字符与嵌套大括号
+func extractBalancedJSON(s string) (string, bool) {
+	start := strings.IndexByte(s, '{')
+	if start == -1 {
+		return "", false
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(s); i++ {
+		b := s[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if b == '\\' {
+			if inString {
+				escaped = true
+			}
+			continue
+		}
+		if b == '"' {
+			inString = !inString
+			continue
+		}
+		if !inString {
+			if b == '{' {
+				depth++
+			} else if b == '}' {
+				depth--
+				if depth == 0 {
+					return s[start : i+1], true
+				}
+			}
+		}
+	}
+	return "", false
+}
 
 func isPossiblePseudoCallStart(text string) bool {
 	trimmed := strings.TrimSpace(text)
@@ -37,11 +76,15 @@ func isPossiblePseudoCallStart(text string) bool {
 
 // parsePseudoToolCall 解析可能被历史提示词污染的伪工具调用纯文本
 func parsePseudoToolCall(text string) (string, string, bool) {
-	m := pseudoToolCallRegex.FindStringSubmatch(text)
-	if len(m) == 3 {
-		var js map[string]interface{}
-		if err := json.Unmarshal([]byte(m[2]), &js); err == nil {
-			return m[1], strings.TrimSpace(m[2]), true
+	loc := pseudoCallPrefixRegex.FindStringSubmatchIndex(text)
+	if len(loc) >= 4 {
+		fnName := text[loc[2]:loc[3]]
+		remainder := text[loc[1]:]
+		if jsonStr, ok := extractBalancedJSON(remainder); ok {
+			var js map[string]interface{}
+			if err := json.Unmarshal([]byte(jsonStr), &js); err == nil {
+				return fnName, jsonStr, true
+			}
 		}
 	}
 	return "", "", false
@@ -1396,8 +1439,8 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 					if pendingPseudoBuf.Len() > 0 || isPossiblePseudoCallStart(textChunk) {
 						pendingPseudoBuf.WriteString(textChunk)
 						buffered := pendingPseudoBuf.String()
-						// 如果包含了闭合大括号 '}' 或换行符，尝试完整匹配解析
-						if strings.Contains(buffered, "}") || strings.Contains(buffered, "\n") {
+						// 如果包含了闭合大括号 '}'，尝试完整匹配解析
+						if strings.Contains(buffered, "}") {
 							if fnName, fnArgs, ok := parsePseudoToolCall(buffered); ok && len(req.Tools) > 0 {
 								hasToolCalls = true
 								callID := "call_" + uuid.New().String()[:8]
@@ -1416,8 +1459,8 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 								continue
 							}
 						}
-						// 如果累积超过 2000 字符且仍然无法匹配为工具调用，放弃缓冲并正常下发
-						if pendingPseudoBuf.Len() > 2000 {
+						// 如果累积超过 65536 字符且仍然无法匹配为工具调用，放弃缓冲并正常下发
+						if pendingPseudoBuf.Len() > 65536 {
 							flushStr := pendingPseudoBuf.String()
 							pendingPseudoBuf.Reset()
 							fullResponseText += flushStr
