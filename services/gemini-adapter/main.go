@@ -62,16 +62,28 @@ func extractBalancedJSON(s string) (string, bool) {
 	return "", false
 }
 
+var pseudoCallStarters = []string{
+	"i called",
+	"i executed",
+	"called tool",
+	"assistant invoked",
+	"[assistant invoked",
+	"invoked tool",
+	"i invoked",
+}
+
 func isPossiblePseudoCallStart(text string) bool {
 	trimmed := strings.TrimSpace(text)
 	lower := strings.ToLower(trimmed)
-	return strings.HasPrefix(lower, "i called") ||
-		strings.HasPrefix(lower, "i executed") ||
-		strings.HasPrefix(lower, "called tool") ||
-		strings.HasPrefix(lower, "assistant invoked") ||
-		strings.HasPrefix(lower, "[assistant invoked") ||
-		strings.HasPrefix(lower, "invoked tool") ||
-		strings.HasPrefix(lower, "i invoked")
+	if lower == "" {
+		return false
+	}
+	for _, s := range pseudoCallStarters {
+		if strings.HasPrefix(s, lower) || strings.HasPrefix(lower, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // parsePseudoToolCall 解析可能被历史提示词污染的伪工具调用纯文本
@@ -1463,6 +1475,14 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 								pendingPseudoBuf.Reset()
 								continue
 							}
+						}
+						// 若缓冲区的现有前缀已不再可能是任何已知的伪调用前缀，立即刷盘释放（保证正常文本的零延迟）
+						if !isPossiblePseudoCallStart(buffered) {
+							flushStr := pendingPseudoBuf.String()
+							pendingPseudoBuf.Reset()
+							fullResponseText += flushStr
+							emitTextDelta(c, flusher, chatCmplID, created, model, flushStr)
+							continue
 						}
 						// 如果累积超过 65536 字符且仍然无法匹配为工具调用，放弃缓冲并正常下发
 						if pendingPseudoBuf.Len() > 65536 {
