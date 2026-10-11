@@ -1257,12 +1257,6 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 					sig := ""
 					if v, ok := thoughtSigCache.Load(tc.ID); ok {
 						sig = v.(string)
-					} else {
-						// 🎯 Redis 二级缓存回查，防止 Pod 重启后丢失签名
-						if s, err := getSigFromRedis(tc.ID); err == nil && s != "" {
-							sig = s
-							thoughtSigCache.Store(tc.ID, s)
-						}
 					}
 					if strings.Contains(sig, "placeholder") || len(sig) < 20 {
 						sig = ""
@@ -1320,11 +1314,6 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 				if tc.ID != "" {
 					if v, ok := thoughtSigCache.Load(tc.ID); ok {
 						sig = v.(string)
-					} else {
-						if s, err := getSigFromRedis(tc.ID); err == nil && s != "" {
-							sig = s
-							thoughtSigCache.Store(tc.ID, s)
-						}
 					}
 				}
 				// 丢弃占位符与非法短签名，防止 Base64 崩溃与 Corrupted 报错
