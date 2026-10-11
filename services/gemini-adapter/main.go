@@ -236,17 +236,19 @@ type GoogleUsage struct {
 // sanitizeGoogleTurns 解决 Google Gemini 原生对话时序强校验限制:
 // "Please ensure that function call turn comes immediately after a user turn or after a function response turn."
 // 规则剖析:
-// 1. 任何带有 functionCall 的 model turn，紧随其后的必须是包含对应 functionResponse 的 user turn。
-// 2. 任何包含 functionResponse 的 user turn，前面必须紧邻着发出 functionCall 的 model turn。
-// 3. 严格交替: 连续相同的 role (user 连 user, 或 model 连 model) 进行 Parts 合并，绝不产生非法同角色切块。
-// 4. 当因为 Compaction 或截断导致出现孤立的 functionCall (缺失后续 response) 时，自动注入一个合法的空/成功 functionResponse。
-// 5. 当出现孤立的 functionResponse (前文被截断缺失 call) 时，自动平滑丢弃该孤立 response 或转为纯文本，防止 Google 400 拒收。
+// 1. 任何带有 functionCall 的 model turn，其前置 turn 必须是纯 user turn 或者纯 functionResponse turn。
+// 2. 任何带有 functionCall 的 model turn，紧随其后的必须是包含匹配 functionResponse 的 user turn。
+// 3. 任何包含 functionResponse 的 user turn，前面必须紧邻着发出匹配 functionCall 的 model turn。
+// 4. 不得在包含 functionResponse 的同一个 user turn 中混杂普通 Text，防止时序歧义。
+// 5. 严格交替: 连续相同的 role (user 连 user, 或 model 连 model) 进行 Parts 合并，绝不产生非法同角色切块。
+// 6. 严禁开局第一轮为 model turn（首轮必须是 user）。
+// 7. 当因为截断/Compaction 导致 functionCall 无法配对时，优雅降级为纯文本，或者补齐占位 functionResponse，确保 100% 满足 Google 状态机。
 func sanitizeGoogleTurns(contents []GoogleContent) []GoogleContent {
 	if len(contents) == 0 {
 		return contents
 	}
 
-	// 步骤一：合并相邻相同 Role 的 Content，确保 Role 严格交替
+	// 步骤一：初始合并相邻相同 Role 的 Content，剔除空 Parts
 	var merged []GoogleContent
 	for _, c := range contents {
 		if len(c.Parts) == 0 {
@@ -259,77 +261,109 @@ func sanitizeGoogleTurns(contents []GoogleContent) []GoogleContent {
 		}
 	}
 
-	// 步骤二：修复 FunctionCall 与 FunctionResponse 的成对时序与合法性
+	// 步骤二：校验并降级非法/孤立的 FunctionResponse 与 FunctionCall
+	// 建立有效呼叫匹配集合
 	var sanitized []GoogleContent
 	for i := 0; i < len(merged); i++ {
 		current := merged[i]
 
-		// 检查是否有 FunctionResponse
-		hasFuncResp := false
-		for _, p := range current.Parts {
-			if p.FunctionResponse != nil {
-				hasFuncResp = true
-				break
-			}
-		}
-
-		if hasFuncResp {
-			// Google 要求: FunctionResponse 必须紧接在包含 FunctionCall 的 model turn 之后
-			// 检查前一个 turn 是否包含匹配的 FunctionCall
-			prevHasFuncCall := false
-			if len(sanitized) > 0 && sanitized[len(sanitized)-1].Role == "model" {
-				for _, p := range sanitized[len(sanitized)-1].Parts {
-					if p.FunctionCall != nil {
-						prevHasFuncCall = true
-						break
-					}
+		if current.Role == "user" {
+			// 检查是否包含 FunctionResponse
+			var funcResponses []*GoogleFunctionResponse
+			var textParts []GooglePart
+			for _, p := range current.Parts {
+				if p.FunctionResponse != nil {
+					funcResponses = append(funcResponses, p.FunctionResponse)
+				} else {
+					textParts = append(textParts, p)
 				}
 			}
 
-			if !prevHasFuncCall {
-				// 前置缺失 FunctionCall (典型 Compaction 裁剪破损场景)
-				// 将无法对应的 FunctionResponse 转译为纯文本 user 说明，避免触发 Google 400 严格校验
-				var newParts []GooglePart
-				for _, p := range current.Parts {
-					if p.FunctionResponse != nil {
-						respBytes, _ := json.Marshal(p.FunctionResponse.Response)
-						newParts = append(newParts, GooglePart{
-							Text: fmt.Sprintf("[Previous tool execution result for %s]: %s", p.FunctionResponse.Name, string(respBytes)),
+			if len(funcResponses) > 0 {
+				// 检查前一个 turn 是否是包含对应 FunctionCall 的 model turn
+				prevCallNames := make(map[string]bool)
+				if len(sanitized) > 0 && sanitized[len(sanitized)-1].Role == "model" {
+					for _, p := range sanitized[len(sanitized)-1].Parts {
+						if p.FunctionCall != nil {
+							prevCallNames[p.FunctionCall.Name] = true
+						}
+					}
+				}
+
+				if len(prevCallNames) == 0 {
+					// 前面根本没有 model functionCall，全部降级为 Text
+					for _, fr := range funcResponses {
+						respBytes, _ := json.Marshal(fr.Response)
+						textParts = append(textParts, GooglePart{
+							Text: fmt.Sprintf("[Previous tool execution result for %s]: %s", fr.Name, string(respBytes)),
 						})
+					}
+					current.Parts = textParts
+				} else {
+					// 前面有 FunctionCall，拆分合法的 FunctionResponse 与无法匹配的孤立项
+					var validRespParts []GooglePart
+					for _, fr := range funcResponses {
+						if prevCallNames[fr.Name] {
+							validRespParts = append(validRespParts, GooglePart{
+								FunctionResponse: fr,
+							})
+						} else {
+							respBytes, _ := json.Marshal(fr.Response)
+							textParts = append(textParts, GooglePart{
+								Text: fmt.Sprintf("[Previous tool execution result for %s]: %s", fr.Name, string(respBytes)),
+							})
+						}
+					}
+
+					// Google 要求: 带有 functionResponse 的 user turn 不应和普通用户提问混杂在同一 turn
+					// 若同时存在 textParts 与 validRespParts，分别生成两个 user turn（后续由合成逻辑处理交替）
+					if len(textParts) > 0 {
+						sanitized = append(sanitized, GoogleContent{
+							Role:  "user",
+							Parts: textParts,
+						})
+					}
+					if len(validRespParts) > 0 {
+						current.Parts = validRespParts
 					} else {
-						newParts = append(newParts, p)
+						// 全部都是无效的 response，已加入 textParts，当前循环结束
+						continue
 					}
 				}
-				current.Parts = newParts
 			}
 		}
 
-		// 检查当前 turn 是否有 FunctionCall
+		// 检查当前 turn 是否为 model 且包含 FunctionCall
 		var funcCalls []*GoogleFunctionCall
-		for _, p := range current.Parts {
-			if p.FunctionCall != nil {
-				funcCalls = append(funcCalls, p.FunctionCall)
+		if current.Role == "model" {
+			for _, p := range current.Parts {
+				if p.FunctionCall != nil {
+					funcCalls = append(funcCalls, p.FunctionCall)
+				}
 			}
 		}
 
 		sanitized = append(sanitized, current)
 
-		// 如果当前 model turn 包含了 FunctionCall，Google 强制规定紧接着必须是 user turn 并且包含 FunctionResponse
+		// 如果当前 model turn 包含了 FunctionCall，Google 强制规定紧接着必须是 user turn 并且包含匹配的 FunctionResponse
 		if len(funcCalls) > 0 && current.Role == "model" {
-			// 检查下一个 turn 是否是 user 并且提供了对应的 FunctionResponse
-			nextHasFuncResp := false
+			nextHasMatchingResp := false
 			if i+1 < len(merged) && merged[i+1].Role == "user" {
+				// 检查下一轮是否包含任意一个匹配的 tool response
 				for _, p := range merged[i+1].Parts {
 					if p.FunctionResponse != nil {
-						nextHasFuncResp = true
-						break
+						for _, fc := range funcCalls {
+							if fc.Name == p.FunctionResponse.Name {
+								nextHasMatchingResp = true
+								break
+							}
+						}
 					}
 				}
 			}
 
-			if !nextHasFuncResp {
-				// 发生孤立 FunctionCall (Compaction 或请求末尾被截断，缺失 tool response)
-				// 自动注入合成的 user function response，满足 Google 协议的闭环校验要求
+			if !nextHasMatchingResp {
+				// 发生孤立 FunctionCall，自动注入匹配的合成 user function response
 				var syntheticParts []GooglePart
 				for _, fc := range funcCalls {
 					syntheticParts = append(syntheticParts, GooglePart{
@@ -350,11 +384,65 @@ func sanitizeGoogleTurns(contents []GoogleContent) []GoogleContent {
 		}
 	}
 
-	// 步骤三：再次确保没有连续相同的 role（比如注入合成 user 后紧跟下一个 user）
-	var finalContents []GoogleContent
+	// 步骤三：再次严格归一化交替关系
+	// 1. 合并连续相同 Role（但若前一个 user 含有 functionResponse 且后一个包含 text，则为了保持 Google 规范，合并为纯 user 块）
+	// 2. 确保第一轮必须是 user（如果第一轮是 model，合成前置空 user）
+	var normalized []GoogleContent
 	for _, c := range sanitized {
 		if len(c.Parts) == 0 {
 			continue
+		}
+		if len(normalized) == 0 && c.Role == "model" {
+			normalized = append(normalized, GoogleContent{
+				Role:  "user",
+				Parts: []GooglePart{{Text: "Hello"}},
+			})
+		}
+		if len(normalized) > 0 && normalized[len(normalized)-1].Role == c.Role {
+			normalized[len(normalized)-1].Parts = append(normalized[len(normalized)-1].Parts, c.Parts...)
+		} else {
+			normalized = append(normalized, c)
+		}
+	}
+
+	// 步骤四：最后一道防线 —— 扫描整体序列，确保没有任何孤立或乱序
+	var finalContents []GoogleContent
+	for idx, c := range normalized {
+		if c.Role == "user" {
+			hasFuncResp := false
+			for _, p := range c.Parts {
+				if p.FunctionResponse != nil {
+					hasFuncResp = true
+					break
+				}
+			}
+			if hasFuncResp {
+				// 严格校验前置 turn 是否存在 FunctionCall
+				prevCallExists := false
+				if idx > 0 && finalContents[len(finalContents)-1].Role == "model" {
+					for _, p := range finalContents[len(finalContents)-1].Parts {
+						if p.FunctionCall != nil {
+							prevCallExists = true
+							break
+						}
+					}
+				}
+				if !prevCallExists {
+					// 兜底降级该 turn 内的所有 functionResponse 为纯 Text
+					var safeParts []GooglePart
+					for _, p := range c.Parts {
+						if p.FunctionResponse != nil {
+							rb, _ := json.Marshal(p.FunctionResponse.Response)
+							safeParts = append(safeParts, GooglePart{
+								Text: fmt.Sprintf("[Previous tool execution result for %s]: %s", p.FunctionResponse.Name, string(rb)),
+							})
+						} else {
+							safeParts = append(safeParts, p)
+						}
+					}
+					c.Parts = safeParts
+				}
+			}
 		}
 		if len(finalContents) > 0 && finalContents[len(finalContents)-1].Role == c.Role {
 			finalContents[len(finalContents)-1].Parts = append(finalContents[len(finalContents)-1].Parts, c.Parts...)
