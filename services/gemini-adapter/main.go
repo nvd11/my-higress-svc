@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"regexp"
@@ -22,6 +23,39 @@ var thoughtSigCache sync.Map // map[string]string: callID / toolName -> thoughtS
 var callIDToName sync.Map    // map[string]string: callID -> functionName
 
 var pseudoCallPrefixRegex = regexp.MustCompile("(?is)(?:\\[?Assistant\\s+|I\\s+)?(?:invoked|called|executed)\\s+(?:tool\\s+)?[`'\"]?([\\w\\:\\-]+)[`'\"]?\\s+with\\s+(?:args|arguments|input):\\s*")
+
+// cleanJSONStringLiteralNewlines 预处理 JSON: 修复在多行字符串中未转义的字面量换行符，防止 json.Unmarshal 报 invalid character '\n' in string literal
+func cleanJSONStringLiteralNewlines(s string) string {
+	var sb strings.Builder
+	inString := false
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		b := s[i]
+		if escaped {
+			escaped = false
+			sb.WriteByte(b)
+			continue
+		}
+		if b == '\\' {
+			escaped = true
+			sb.WriteByte(b)
+			continue
+		}
+		if b == '"' {
+			inString = !inString
+			sb.WriteByte(b)
+			continue
+		}
+		if inString && (b == '\n' || b == '\r') {
+			if b == '\n' {
+				sb.WriteString("\\n")
+			}
+			continue
+		}
+		sb.WriteByte(b)
+	}
+	return sb.String()
+}
 
 // extractBalancedJSON 寻找从 text 开始或从 '{' 开始的有效最外层 JSON 对象，准确跳过字符串内包含的转义字符与嵌套大括号
 func extractBalancedJSON(s string) (string, bool) {
@@ -93,13 +127,105 @@ func parsePseudoToolCall(text string) (string, string, bool) {
 		fnName := text[loc[2]:loc[3]]
 		remainder := text[loc[1]:]
 		if jsonStr, ok := extractBalancedJSON(remainder); ok {
+			cleanedJSON := cleanJSONStringLiteralNewlines(jsonStr)
 			var js map[string]interface{}
-			if err := json.Unmarshal([]byte(jsonStr), &js); err == nil {
-				return fnName, jsonStr, true
+			if err := json.Unmarshal([]byte(cleanedJSON), &js); err == nil {
+				return fnName, cleanedJSON, true
 			}
 		}
 	}
 	return "", "", false
+}
+
+var redisAddr = os.Getenv("REDIS_ADDR")
+var redisPass = os.Getenv("REDIS_PASSWORD")
+
+func init() {
+	if redisAddr == "" {
+		redisAddr = "redis.redis.svc.cluster.local:6379"
+	}
+	if redisPass == "" {
+		redisPass = "hsbc1234"
+	}
+}
+
+func getSigFromRedis(callID string) (string, error) {
+	if redisAddr == "" || callID == "" {
+		return "", nil
+	}
+	conn, err := net.DialTimeout("tcp", redisAddr, 800*time.Millisecond)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(800 * time.Millisecond))
+
+	r := bufio.NewReader(conn)
+	w := bufio.NewWriter(conn)
+
+	if redisPass != "" {
+		fmt.Fprintf(w, "*2\r\n$4\r\nAUTH\r\n$%d\r\n%s\r\n", len(redisPass), redisPass)
+		_ = w.Flush()
+		line, err := r.ReadString('\n')
+		if err != nil || !strings.HasPrefix(line, "+OK") {
+			return "", fmt.Errorf("redis auth failed")
+		}
+	}
+
+	key := "gemini:sig:" + callID
+	fmt.Fprintf(w, "*2\r\n$3\r\nGET\r\n$%d\r\n%s\r\n", len(key), key)
+	_ = w.Flush()
+
+	line, err := r.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+	if strings.HasPrefix(line, "$-1") {
+		return "", nil
+	}
+	if strings.HasPrefix(line, "$") {
+		var length int
+		if _, err := fmt.Sscanf(line, "$%d", &length); err == nil && length > 0 {
+			buf := make([]byte, length)
+			_, _ = io.ReadFull(r, buf)
+			_, _ = r.ReadString('\n')
+			return string(buf), nil
+		}
+	}
+	return "", nil
+}
+
+func setSigInRedis(callID, sig string) {
+	if redisAddr == "" || callID == "" || sig == "" {
+		return
+	}
+	go func() {
+		conn, err := net.DialTimeout("tcp", redisAddr, 1*time.Second)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(1 * time.Second))
+
+		r := bufio.NewReader(conn)
+		w := bufio.NewWriter(conn)
+
+		if redisPass != "" {
+			fmt.Fprintf(w, "*2\r\n$4\r\nAUTH\r\n$%d\r\n%s\r\n", len(redisPass), redisPass)
+			_ = w.Flush()
+			line, err := r.ReadString('\n')
+			if err != nil || !strings.HasPrefix(line, "+OK") {
+				return
+			}
+		}
+
+		key := "gemini:sig:" + callID
+		// SET key sig EX 604800 (7 days)
+		fmt.Fprintf(w, "*5\r\n$3\r\nSET\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n$2\r\nEX\r\n$6\r\n604800\r\n",
+			len(key), key, len(sig), sig)
+		_ = w.Flush()
+		_, _ = r.ReadString('\n')
+	}()
 }
 
 func emitTextDelta(c *gin.Context, flusher http.Flusher, chatCmplID string, created int64, model string, text string) {
@@ -1131,6 +1257,12 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 					sig := ""
 					if v, ok := thoughtSigCache.Load(tc.ID); ok {
 						sig = v.(string)
+					} else {
+						// 🎯 Redis 二级缓存回查，防止 Pod 重启后丢失签名
+						if s, err := getSigFromRedis(tc.ID); err == nil && s != "" {
+							sig = s
+							thoughtSigCache.Store(tc.ID, s)
+						}
 					}
 					if strings.Contains(sig, "placeholder") || len(sig) < 20 {
 						sig = ""
@@ -1188,6 +1320,11 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 				if tc.ID != "" {
 					if v, ok := thoughtSigCache.Load(tc.ID); ok {
 						sig = v.(string)
+					} else {
+						if s, err := getSigFromRedis(tc.ID); err == nil && s != "" {
+							sig = s
+							thoughtSigCache.Store(tc.ID, s)
+						}
 					}
 				}
 				// 丢弃占位符与非法短签名，防止 Base64 崩溃与 Corrupted 报错
@@ -1528,6 +1665,7 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 
 					if part.ThoughtSignature != "" {
 						thoughtSigCache.Store(callID, part.ThoughtSignature)
+						setSigInRedis(callID, part.ThoughtSignature)
 					}
 
 					tcObj := gin.H{
@@ -1741,6 +1879,7 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 			if part.ThoughtSignature != "" {
 				thoughtSigCache.Store(callID, part.ThoughtSignature)
 				thoughtSigCache.Store(part.FunctionCall.Name, part.ThoughtSignature)
+				setSigInRedis(callID, part.ThoughtSignature)
 			}
 			outToolCalls = append(outToolCalls, gin.H{
 				"id":   callID,
