@@ -606,7 +606,21 @@ func cleanGeminiSchema(schema interface{}) interface{} {
 			}
 			// 将 const: X 转为 enum: [X]，因为 Gemini 不支持 const 关键字
 			if trimmedKey == "const" {
-				cleaned["enum"] = []interface{}{val}
+				cleaned["enum"] = []interface{}{cleanGeminiSchema(val)}
+				continue
+			}
+			// Gemini 对 anyOf / allOf / oneOf 的支持限制极大，如果其中包含 const 转换或不支持类型，会导致报错。
+			// 递归处理子项
+			if trimmedKey == "anyOf" || trimmedKey == "any_of" {
+				cleaned["anyOf"] = cleanGeminiSchema(val)
+				continue
+			}
+			if trimmedKey == "oneOf" || trimmedKey == "one_of" {
+				cleaned["oneOf"] = cleanGeminiSchema(val)
+				continue
+			}
+			if trimmedKey == "allOf" || trimmedKey == "all_of" {
+				cleaned["allOf"] = cleanGeminiSchema(val)
 				continue
 			}
 			// 将 exclusiveMinimum/exclusiveMaximum 转为 Google 支持的 minimum/maximum
