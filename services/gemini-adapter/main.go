@@ -532,6 +532,22 @@ func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promp
 			keyAlias = "yui-higress"
 		case strings.Contains(auth, "hebe"):
 			keyAlias = "hebe-higress"
+		case strings.Contains(auth, "moon"):
+			keyAlias = "moon-higress"
+		case strings.Contains(auth, "stella"):
+			keyAlias = "stella-higress"
+		case strings.Contains(auth, "alice"):
+			keyAlias = "alice-higress"
+		case strings.Contains(auth, "claire"):
+			keyAlias = "claire-higress"
+		case strings.Contains(auth, "leona"):
+			keyAlias = "leona-higress"
+		case strings.Contains(auth, "aurora"):
+			keyAlias = "aurora-higress"
+		case strings.Contains(auth, "rin"):
+			keyAlias = "rin-higress"
+		case strings.Contains(auth, "celia"):
+			keyAlias = "celia-higress"
 		case strings.Contains(auth, "jayden"):
 			keyAlias = "jayden-higress"
 		default:
