@@ -223,6 +223,12 @@ func TestParsePseudoToolCall(t *testing.T) {
 		t.Fatalf("failed parsing sNested: fn=%s, args=%s, ok=%v", fn, args, ok)
 	}
 
+	sNullPrefix := `nullI executed exec with input: {"command":"pwd"}`
+	fn, args, ok = parsePseudoToolCall(sNullPrefix)
+	if !ok || fn != "exec" || args != `{"command":"pwd"}` {
+		t.Fatalf("failed parsing sNullPrefix: fn=%s, args=%s, ok=%v", fn, args, ok)
+	}
+
 	s4 := `Just normal conversational text from model.`
 	_, _, ok = parsePseudoToolCall(s4)
 	if ok {
