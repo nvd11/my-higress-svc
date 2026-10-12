@@ -22,7 +22,7 @@ import (
 var thoughtSigCache sync.Map // map[string]string: callID / toolName -> thoughtSignature
 var callIDToName sync.Map    // map[string]string: callID -> functionName
 
-var pseudoCallPrefixRegex = regexp.MustCompile("(?is)(?:\\[?Assistant\\s+|I\\s+)?(?:invoked|called|executed)\\s+(?:tool\\s+)?[`'\"]?([\\w\\:\\-]+)[`'\"]?\\s+with\\s+(?:args|arguments|input):\\s*")
+var pseudoCallPrefixRegex = regexp.MustCompile("(?is)(?:null\\s*)?(?:\\[?Assistant\\s+|I\\s+)?(?:invoked|called|executed)\\s+(?:tool\\s+)?[`'\"]?([\\w\\:\\-]+)[`'\"]?\\s+with\\s+(?:args|arguments|input):\\s*")
 
 // cleanJSONStringLiteralNewlines 预处理 JSON: 修复在多行字符串中未转义的字面量换行符，防止 json.Unmarshal 报 invalid character '\n' in string literal
 func cleanJSONStringLiteralNewlines(s string) string {
@@ -111,6 +111,13 @@ func isPossiblePseudoCallStart(text string) bool {
 	lower := strings.ToLower(trimmed)
 	if lower == "" {
 		return false
+	}
+	if strings.HasPrefix(lower, "null") {
+		sub := strings.TrimSpace(strings.TrimPrefix(lower, "null"))
+		if sub == "" {
+			return true
+		}
+		lower = sub
 	}
 	for _, s := range pseudoCallStarters {
 		if strings.HasPrefix(s, lower) || strings.HasPrefix(lower, s) {
