@@ -24,37 +24,131 @@ var callIDToName sync.Map    // map[string]string: callID -> functionName
 
 var pseudoCallPrefixRegex = regexp.MustCompile("(?is)(?:null\\s*)?(?:\\[?Assistant\\s+|I\\s+)?(?:invoked|called|executed)\\s+(?:tool\\s+)?[`'\"]?([\\w\\:\\-]+)[`'\"]?\\s+with\\s+(?:args|arguments|input):\\s*")
 
-// cleanJSONStringLiteralNewlines 预处理 JSON: 修复在多行字符串中未转义的字面量换行符，防止 json.Unmarshal 报 invalid character '\n' in string literal
-func cleanJSONStringLiteralNewlines(s string) string {
+// cleanJSONString 预处理与净化 JSON 字符串:
+// 1. 修复在多行字符串中未转义的字面量换行符、回车符和制表符，防止 invalid character '\n' in string literal
+// 2. 修复非标准或非法转义字符：
+//    - \' -> ' (JSON 规范中单引号不转义)
+//    - \xHH -> \u00HH (将十六进制转义统一转换为标准 JSON Unicode 转义)
+//    - \a -> \u0007, \e -> \u001b, \v -> \u000b
+//    - 未知的 \c (除 " \ / b f n r t u 外) -> c (剔除多余的非法反斜杠)
+// 3. 处理字符串末尾悬挂的反斜杠
+func cleanJSONString(s string) string {
 	var sb strings.Builder
 	inString := false
-	escaped := false
-	for i := 0; i < len(s); i++ {
+	n := len(s)
+	for i := 0; i < n; i++ {
 		b := s[i]
-		if escaped {
-			escaped = false
+		if !inString {
+			if b == '"' {
+				inString = true
+			}
 			sb.WriteByte(b)
 			continue
 		}
+
+		// inString == true
 		if b == '\\' {
-			escaped = true
-			sb.WriteByte(b)
-			continue
-		}
-		if b == '"' {
-			inString = !inString
-			sb.WriteByte(b)
-			continue
-		}
-		if inString && (b == '\n' || b == '\r') {
-			if b == '\n' {
+			if i+1 >= n {
+				// 字符串末尾悬挂的孤儿反斜杠，安全丢弃
+				continue
+			}
+			nxt := s[i+1]
+			switch nxt {
+			case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
+				// 标准合法的 JSON 转义字符，原样保留
+				sb.WriteByte('\\')
+				sb.WriteByte(nxt)
+				i++
+			case 'u':
+				// Unicode 转义：检查后续 4 个字符是否全为十六进制
+				if i+5 < n && isHex4(s[i+2:i+6]) {
+					sb.WriteString(s[i : i+6])
+					i += 5
+				} else {
+					sb.WriteString("\\u")
+					i++
+				}
+			case '\'':
+				// JSON 中单引号不转义，直接输出单引号
+				sb.WriteByte('\'')
+				i++
+			case 'x':
+				// 十六进制转义 \xHH -> 转换为标准 JSON \u00HH
+				if i+3 < n && isHex2(s[i+2:i+4]) {
+					sb.WriteString("\\u00")
+					sb.WriteByte(s[i+2])
+					sb.WriteByte(s[i+3])
+					i += 3
+				} else {
+					sb.WriteByte('x')
+					i++
+				}
+			case 'a':
+				sb.WriteString("\\u0007")
+				i++
+			case 'e':
+				sb.WriteString("\\u001b")
+				i++
+			case 'v':
+				sb.WriteString("\\u000b")
+				i++
+			case '\n', '\r':
+				// 反斜杠后跟字面量换行（跨行连接符），转义为 \n
 				sb.WriteString("\\n")
+				i++
+			default:
+				// 其他非法非标转义（如 \?, \@, \= 等），直接保留原字符，剔除非法反斜杠
+				sb.WriteByte(nxt)
+				i++
 			}
 			continue
 		}
+
+		if b == '"' {
+			inString = false
+			sb.WriteByte(b)
+			continue
+		}
+
+		// 处理字符串内未转义的控制字符与换行
+		if b == '\n' {
+			sb.WriteString("\\n")
+			continue
+		}
+		if b == '\r' {
+			sb.WriteString("\\r")
+			continue
+		}
+		if b == '\t' {
+			sb.WriteString("\\t")
+			continue
+		}
+		if b < 0x20 {
+			sb.WriteString(fmt.Sprintf("\\u%04x", b))
+			continue
+		}
+
 		sb.WriteByte(b)
 	}
 	return sb.String()
+}
+
+func isHex4(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+func isHex2(s string) bool {
+	return isHex4(s)
+}
+
+func cleanJSONStringLiteralNewlines(s string) string {
+	return cleanJSONString(s)
 }
 
 // extractBalancedJSON 寻找从 text 开始或从 '{' 开始的有效最外层 JSON 对象，准确跳过字符串内包含的转义字符与嵌套大括号
@@ -127,21 +221,42 @@ func isPossiblePseudoCallStart(text string) bool {
 	return false
 }
 
-// parsePseudoToolCall 解析可能被历史提示词污染的伪工具调用纯文本
-func parsePseudoToolCall(text string) (string, string, bool) {
+func repairLooseJSON(s string) (string, bool) {
+	reKey := regexp.MustCompile(`'([a-zA-Z0-9_\-]+)'\s*:`)
+	s2 := reKey.ReplaceAllString(s, `"$1":`)
+	var js map[string]interface{}
+	if err := json.Unmarshal([]byte(cleanJSONString(s2)), &js); err == nil {
+		b, _ := json.Marshal(js)
+		return string(b), true
+	}
+	return "", false
+}
+
+// extractConversationalAndPseudoToolCall 从文本中同时提取前置自然语言回复与伪工具调用
+func extractConversationalAndPseudoToolCall(text string) (prefixText string, fnName string, fnArgs string, ok bool) {
 	loc := pseudoCallPrefixRegex.FindStringSubmatchIndex(text)
 	if len(loc) >= 4 {
-		fnName := text[loc[2]:loc[3]]
+		prefixText = strings.TrimSpace(text[:loc[0]])
+		fnName = text[loc[2]:loc[3]]
 		remainder := text[loc[1]:]
-		if jsonStr, ok := extractBalancedJSON(remainder); ok {
-			cleanedJSON := cleanJSONStringLiteralNewlines(jsonStr)
+		if jsonStr, okJSON := extractBalancedJSON(remainder); okJSON {
+			cleanedJSON := cleanJSONString(jsonStr)
 			var js map[string]interface{}
 			if err := json.Unmarshal([]byte(cleanedJSON), &js); err == nil {
-				return fnName, cleanedJSON, true
+				return prefixText, fnName, cleanedJSON, true
+			}
+			if repairedJSON, okRepair := repairLooseJSON(cleanedJSON); okRepair {
+				return prefixText, fnName, repairedJSON, true
 			}
 		}
 	}
-	return "", "", false
+	return "", "", "", false
+}
+
+// parsePseudoToolCall 解析可能被历史提示词污染的伪工具调用纯文本
+func parsePseudoToolCall(text string) (string, string, bool) {
+	_, fnName, fnArgs, ok := extractConversationalAndPseudoToolCall(text)
+	return fnName, fnArgs, ok
 }
 
 var redisAddr = os.Getenv("REDIS_ADDR")
@@ -1322,6 +1437,23 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 					if v, ok := thoughtSigCache.Load(tc.ID); ok {
 						sig = v.(string)
 					}
+					if sig == "" {
+						if redisSig, err := getSigFromRedis(tc.ID); err == nil && redisSig != "" {
+							sig = redisSig
+							thoughtSigCache.Store(tc.ID, sig)
+						}
+					}
+				}
+				if sig == "" && tc.Function.Name != "" {
+					if v, ok := thoughtSigCache.Load(tc.Function.Name); ok {
+						sig = v.(string)
+					}
+					if sig == "" {
+						if redisSig, err := getSigFromRedis(tc.Function.Name); err == nil && redisSig != "" {
+							sig = redisSig
+							thoughtSigCache.Store(tc.Function.Name, sig)
+						}
+					}
 				}
 				// 丢弃占位符与非法短签名，防止 Base64 崩溃与 Corrupted 报错
 				if strings.Contains(sig, "placeholder") || len(sig) < 20 {
@@ -1445,6 +1577,16 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 		}
 		if len(decls) > 0 {
 			gReq.Tools = append(gReq.Tools, GoogleTool{FunctionDeclarations: decls})
+			toolPromptInstruction := "\nIMPORTANT: Always invoke tools using structured function calls. Never output plain text descriptions like 'I executed [tool] with input: ...' or 'nullI executed ...'."
+			if gReq.SystemInstruction == nil {
+				gReq.SystemInstruction = &GoogleContent{
+					Parts: []GooglePart{{Text: toolPromptInstruction}},
+				}
+			} else {
+				gReq.SystemInstruction.Parts = append(gReq.SystemInstruction.Parts, GooglePart{
+					Text: toolPromptInstruction,
+				})
+			}
 		}
 	}
 
@@ -1600,12 +1742,26 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 					textChunk := part.Text
 
 					// 🎯 核心防幻觉拦截: 捕获并缓冲以 "I called tool", "Assistant invoked tool" 等开头的流式片段
-					if pendingPseudoBuf.Len() > 0 || isPossiblePseudoCallStart(textChunk) {
+					if pendingPseudoBuf.Len() > 0 || isPossiblePseudoCallStart(textChunk) || pseudoCallPrefixRegex.MatchString(textChunk) {
+						// 若缓冲区为空，且当前 chunk 前部包含普通对话文本，先将前置对话文本立即刷流下发
+						if pendingPseudoBuf.Len() == 0 {
+							if loc := pseudoCallPrefixRegex.FindStringIndex(textChunk); len(loc) >= 2 && loc[0] > 0 {
+								convPrefix := textChunk[:loc[0]]
+								fullResponseText += convPrefix
+								emitTextDelta(c, flusher, chatCmplID, created, model, convPrefix)
+								textChunk = textChunk[loc[0]:]
+							}
+						}
+
 						pendingPseudoBuf.WriteString(textChunk)
 						buffered := pendingPseudoBuf.String()
 						// 如果包含了闭合大括号 '}'，尝试完整匹配解析
 						if strings.Contains(buffered, "}") {
-							if fnName, fnArgs, ok := parsePseudoToolCall(buffered); ok && len(req.Tools) > 0 {
+							if prefixText, fnName, fnArgs, ok := extractConversationalAndPseudoToolCall(buffered); ok && len(req.Tools) > 0 {
+								if prefixText != "" {
+									fullResponseText += prefixText
+									emitTextDelta(c, flusher, chatCmplID, created, model, prefixText)
+								}
 								hasToolCalls = true
 								callID := "call_" + uuid.New().String()[:8]
 								callIDToName.Store(callID, fnName)
@@ -1624,7 +1780,7 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 							}
 						}
 						// 若缓冲区的现有前缀已不再可能是任何已知的伪调用前缀，立即刷盘释放（保证正常文本的零延迟）
-						if !isPossiblePseudoCallStart(buffered) {
+						if !isPossiblePseudoCallStart(buffered) && !pseudoCallPrefixRegex.MatchString(buffered) {
 							flushStr := pendingPseudoBuf.String()
 							pendingPseudoBuf.Reset()
 							fullResponseText += flushStr
@@ -1773,7 +1929,11 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 
 		if pendingPseudoBuf.Len() > 0 {
 			buffered := pendingPseudoBuf.String()
-			if fnName, fnArgs, ok := parsePseudoToolCall(buffered); ok && len(req.Tools) > 0 {
+			if prefixText, fnName, fnArgs, ok := extractConversationalAndPseudoToolCall(buffered); ok && len(req.Tools) > 0 {
+				if prefixText != "" {
+					fullResponseText += prefixText
+					emitTextDelta(c, flusher, chatCmplID, created, model, prefixText)
+				}
 				hasToolCalls = true
 				callID := "call_" + uuid.New().String()[:8]
 				callIDToName.Store(callID, fnName)
@@ -1846,7 +2006,10 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 
 	for _, part := range cand.Content.Parts {
 		if part.Text != "" {
-			if fnName, fnArgs, ok := parsePseudoToolCall(part.Text); ok && len(req.Tools) > 0 {
+			if prefixText, fnName, fnArgs, ok := extractConversationalAndPseudoToolCall(part.Text); ok && len(req.Tools) > 0 {
+				if prefixText != "" {
+					outContent += prefixText
+				}
 				callID := "call_" + uuid.New().String()[:8]
 				callIDToName.Store(callID, fnName)
 				outToolCalls = append(outToolCalls, gin.H{

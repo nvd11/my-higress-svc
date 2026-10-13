@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -229,10 +230,45 @@ func TestParsePseudoToolCall(t *testing.T) {
 		t.Fatalf("failed parsing sNullPrefix: fn=%s, args=%s, ok=%v", fn, args, ok)
 	}
 
+	// 验证：包含非标 \' 转义的 Python/Shell 复杂命令能被正确净化解析 (Alice 故障场景)
+	sSingleQuote := `nullI executed write with input: {"content":"subprocess.call(['ssh', \'upload\'])", "path":"test.py"}`
+	fn, args, ok = parsePseudoToolCall(sSingleQuote)
+	if !ok || fn != "write" || !strings.Contains(args, "subprocess.call") {
+		t.Fatalf("failed parsing sSingleQuote: fn=%s, args=%s, ok=%v", fn, args, ok)
+	}
+
+	// 验证：包含 \x27 十六进制转义的复杂 Shell 命令 (Alice 故障场景)
+	sHexEscape := `nullI executed exec with input: {"command":"curl -H 'Authorization: alist-xxx' --data-binary \x27@file.rmvb\x27"}`
+	fn, args, ok = parsePseudoToolCall(sHexEscape)
+	if !ok || fn != "exec" || !strings.Contains(args, "alist-xxx") {
+		t.Fatalf("failed parsing sHexEscape: fn=%s, args=%s, ok=%v", fn, args, ok)
+	}
+
+	// 验证：包含前置自然语言回复的混合文本能精准切分
+	sMixed := "收到 Boss! 马上为您处理！💋\n\nnullI executed exec with input: {\"command\":\"uptime\"}"
+	convPrefix, fn, args, ok := extractConversationalAndPseudoToolCall(sMixed)
+	if !ok || fn != "exec" || convPrefix != "收到 Boss! 马上为您处理！💋" || args != `{"command":"uptime"}` {
+		t.Fatalf("failed parsing sMixed: convPrefix=%s, fn=%s, args=%s, ok=%v", convPrefix, fn, args, ok)
+	}
+
 	s4 := `Just normal conversational text from model.`
 	_, _, ok = parsePseudoToolCall(s4)
 	if ok {
 		t.Fatalf("s4 should not match pseudo tool call")
+	}
+
+	// 验证：Alice 真实报错场景中的 Python 脚本（包含多种复杂转义与嵌套引号）
+	sAliceS2 := `nullI executed ` + "`" + `write` + "`" + ` with input: {"content":"import subprocess\nTOKEN = \"alist-xxx\"\nupload_cmd = f'''curl -s -X PUT \"http://localhost:5244/api/fs/put\" \\\n -H \"Authorization: {TOKEN}\" \\\n --data-binary \"@{starfive_path}\"'''\nsubprocess.check_call(['ssh', 'gateman@10.0.1.227', \'{upload_cmd}\'])","path":"/home/gateman/.openclaw/workspace/scripts/sync_initial_d_season2.py"}`
+	fn, args, ok = parsePseudoToolCall(sAliceS2)
+	if !ok || fn != "write" {
+		t.Fatalf("failed parsing sAliceS2: fn=%s, ok=%v", fn, ok)
+	}
+	var s2Args map[string]interface{}
+	if err := json.Unmarshal([]byte(args), &s2Args); err != nil {
+		t.Fatalf("sAliceS2 args invalid json: %v", err)
+	}
+	if s2Args["path"] != "/home/gateman/.openclaw/workspace/scripts/sync_initial_d_season2.py" {
+		t.Fatalf("unexpected sAliceS2 path: %v", s2Args["path"])
 	}
 }
 
