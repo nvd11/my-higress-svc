@@ -310,3 +310,45 @@ func TestMissingSigPairwiseDegrade(t *testing.T) {
 		}
 	}
 }
+
+func TestFindActiveAssistantIdx(t *testing.T) {
+	// 场景 1：以 User 提问结尾（典型的用户提问场景，例如"检查一下我的支出表"）
+	// 所有前序工具调用均为历史旧账，必须返回 -1，0 次 Redis 探测
+	msgs1 := []OpenAIMessage{
+		{Role: "user", Content: "step 1"},
+		{Role: "assistant", ToolCalls: []OpenAIToolCall{{ID: "call_1", Function: OpenAIFunctionCallDesc{Name: "bash"}}}},
+		{Role: "tool", ToolCallID: "call_1", Content: "ok"},
+		{Role: "assistant", Content: "done 1"},
+		{Role: "user", Content: "检查一下我的支出表"},
+	}
+	if idx := findActiveAssistantIdx(msgs1); idx != -1 {
+		t.Fatalf("expected -1 for user-ending conversation, got %d", idx)
+	}
+
+	// 场景 2：以 Tool 响应结尾（正在执行的 ReAct 循环末端）
+	// 只有倒数第二个包含待响应 tool_calls 的 assistant 消息才算活跃
+	msgs2 := []OpenAIMessage{
+		{Role: "user", Content: "step 1"},
+		{Role: "assistant", ToolCalls: []OpenAIToolCall{{ID: "call_old", Function: OpenAIFunctionCallDesc{Name: "read"}}}},
+		{Role: "tool", ToolCallID: "call_old", Content: "old content"},
+		{Role: "user", Content: "step 2"},
+		{Role: "assistant", ToolCalls: []OpenAIToolCall{{ID: "call_active", Function: OpenAIFunctionCallDesc{Name: "bash"}}}},
+		{Role: "tool", ToolCallID: "call_active", Content: "new content"},
+	}
+	if idx := findActiveAssistantIdx(msgs2); idx != 4 {
+		t.Fatalf("expected 4 for active tool response turn, got %d", idx)
+	}
+
+	// 场景 3：末尾 assistant 包含并发多工具调用且正在返回多个 tool response
+	msgs3 := []OpenAIMessage{
+		{Role: "assistant", ToolCalls: []OpenAIToolCall{
+			{ID: "call_a", Function: OpenAIFunctionCallDesc{Name: "read"}},
+			{ID: "call_b", Function: OpenAIFunctionCallDesc{Name: "grep"}},
+		}},
+		{Role: "tool", ToolCallID: "call_a", Content: "res_a"},
+		{Role: "tool", ToolCallID: "call_b", Content: "res_b"},
+	}
+	if idx := findActiveAssistantIdx(msgs3); idx != 0 {
+		t.Fatalf("expected 0 for parallel active tool turn, got %d", idx)
+	}
+}
