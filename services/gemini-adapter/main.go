@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"regexp"
@@ -257,97 +256,6 @@ func extractConversationalAndPseudoToolCall(text string) (prefixText string, fnN
 func parsePseudoToolCall(text string) (string, string, bool) {
 	_, fnName, fnArgs, ok := extractConversationalAndPseudoToolCall(text)
 	return fnName, fnArgs, ok
-}
-
-var redisAddr = os.Getenv("REDIS_ADDR")
-var redisPass = os.Getenv("REDIS_PASSWORD")
-
-func init() {
-	if redisAddr == "" {
-		redisAddr = "redis.redis.svc.cluster.local:6379"
-	}
-	if redisPass == "" {
-		redisPass = "hsbc1234"
-	}
-}
-
-func getSigFromRedis(callID string) (string, error) {
-	if redisAddr == "" || callID == "" {
-		return "", nil
-	}
-	conn, err := net.DialTimeout("tcp", redisAddr, 800*time.Millisecond)
-	if err != nil {
-		return "", err
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(800 * time.Millisecond))
-
-	r := bufio.NewReader(conn)
-	w := bufio.NewWriter(conn)
-
-	if redisPass != "" {
-		fmt.Fprintf(w, "*2\r\n$4\r\nAUTH\r\n$%d\r\n%s\r\n", len(redisPass), redisPass)
-		_ = w.Flush()
-		line, err := r.ReadString('\n')
-		if err != nil || !strings.HasPrefix(line, "+OK") {
-			return "", fmt.Errorf("redis auth failed")
-		}
-	}
-
-	key := "gemini:sig:" + callID
-	fmt.Fprintf(w, "*2\r\n$3\r\nGET\r\n$%d\r\n%s\r\n", len(key), key)
-	_ = w.Flush()
-
-	line, err := r.ReadString('\n')
-	if err != nil {
-		return "", err
-	}
-	if strings.HasPrefix(line, "$-1") {
-		return "", nil
-	}
-	if strings.HasPrefix(line, "$") {
-		var length int
-		if _, err := fmt.Sscanf(line, "$%d", &length); err == nil && length > 0 {
-			buf := make([]byte, length)
-			_, _ = io.ReadFull(r, buf)
-			_, _ = r.ReadString('\n')
-			return string(buf), nil
-		}
-	}
-	return "", nil
-}
-
-func setSigInRedis(callID, sig string) {
-	if redisAddr == "" || callID == "" || sig == "" {
-		return
-	}
-	go func() {
-		conn, err := net.DialTimeout("tcp", redisAddr, 1*time.Second)
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-		_ = conn.SetDeadline(time.Now().Add(1 * time.Second))
-
-		r := bufio.NewReader(conn)
-		w := bufio.NewWriter(conn)
-
-		if redisPass != "" {
-			fmt.Fprintf(w, "*2\r\n$4\r\nAUTH\r\n$%d\r\n%s\r\n", len(redisPass), redisPass)
-			_ = w.Flush()
-			line, err := r.ReadString('\n')
-			if err != nil || !strings.HasPrefix(line, "+OK") {
-				return
-			}
-		}
-
-		key := "gemini:sig:" + callID
-		// SET key sig EX 604800 (7 days)
-		fmt.Fprintf(w, "*5\r\n$3\r\nSET\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n$2\r\nEX\r\n$6\r\n604800\r\n",
-			len(key), key, len(sig), sig)
-		_ = w.Flush()
-		_, _ = r.ReadString('\n')
-	}()
 }
 
 func emitTextDelta(c *gin.Context, flusher http.Flusher, chatCmplID string, created int64, model string, text string) {
@@ -1412,16 +1320,10 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 						continue
 					}
 
-					// 仅对当前正在执行、等待结果的末端调用探测内存缓存与 Redis
+					// 仅对当前正在执行、等待结果的末端调用探测内存缓存
 					sig := ""
 					if v, ok := thoughtSigCache.Load(tc.ID); ok {
 						sig = v.(string)
-					}
-					if sig == "" {
-						if redisSig, err := getSigFromRedis(tc.ID); err == nil && redisSig != "" {
-							sig = redisSig
-							thoughtSigCache.Store(tc.ID, sig)
-						}
 					}
 					if strings.Contains(sig, "placeholder") || len(sig) < 20 {
 						sig = ""
@@ -1844,7 +1746,6 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 
 					if part.ThoughtSignature != "" {
 						thoughtSigCache.Store(callID, part.ThoughtSignature)
-						setSigInRedis(callID, part.ThoughtSignature)
 					}
 
 					tcObj := gin.H{
@@ -2065,7 +1966,6 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 			if part.ThoughtSignature != "" {
 				thoughtSigCache.Store(callID, part.ThoughtSignature)
 				thoughtSigCache.Store(part.FunctionCall.Name, part.ThoughtSignature)
-				setSigInRedis(callID, part.ThoughtSignature)
 			}
 			outToolCalls = append(outToolCalls, gin.H{
 				"id":   callID,
