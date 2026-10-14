@@ -1270,6 +1270,31 @@ func handleOpenAIUpstreamProxy(c *gin.Context, req OpenAIChatRequest, mCfg *Mode
 	reportAuditLogAsync(chatCmplID, rawAuthHeader, req.Model, actualUsedModel, pTokens, cTokens, rTokens, cacheTokens, latency, http.StatusOK, structuredPrompt, string(respJSONBytes), nil)
 }
 
+// findActiveAssistantIdx 识别当前处于等待工具响应状态的末尾 assistant 消息索引。
+// 规则：只有当会话以 assistant+tool(s) 结尾且之后没有任何 user 提问时，该 assistant 才属于活跃调用；
+// 任何早于该位置或已被后续 user 提问覆盖的历史工具调用，全部直接判定为历史账目。
+func findActiveAssistantIdx(messages []OpenAIMessage) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "tool" {
+			continue
+		}
+		if messages[i].Role == "assistant" && len(messages[i].ToolCalls) > 0 {
+			allToolAfter := true
+			for j := i + 1; j < len(messages); j++ {
+				if messages[j].Role != "tool" {
+					allToolAfter = false
+					break
+				}
+			}
+			if allToolAfter {
+				return i
+			}
+		}
+		break
+	}
+	return -1
+}
+
 // -----------------------------------------------------------------------------
 // handleOpenAIStyle: 接收标准 OpenAI 格式，转译调用 Google AI Studio
 // -----------------------------------------------------------------------------
@@ -1366,19 +1391,37 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 		},
 	}
 
+	// 🎯 核心优化：只对当前末尾处于活跃调用等待状态的 assistant turn 保留原生 FunctionCall 判定。
+	// 凡是在历史对话中早已执行完毕的旧工具调用，全部直接在内存中以自然语言呈现，
+	// 彻底杜绝在 70 万 Token / 6,000+ 消息的长历史中因遍历海量旧调用而对 Redis 发起成千上万次无谓短连接的灾难！
+	activeAssistantIdx := findActiveAssistantIdx(req.Messages)
+
 	// 预先建立本轮请求内所有 tool_calls 的 ID -> Name 快速反查表与缺失签名调用集合
 	localToolMap := make(map[string]string)
 	missingSigCallIDs := make(map[string]bool)
-	for _, m := range req.Messages {
+	for idx, m := range req.Messages {
 		if m.Role == "assistant" {
 			for _, tc := range m.ToolCalls {
 				if tc.ID != "" && tc.Function.Name != "" {
 					localToolMap[tc.ID] = tc.Function.Name
 					callIDToName.Store(tc.ID, tc.Function.Name)
 
+					// 凡是不在活跃末端的历史调用，一律直接标记为降级，绝不触碰 Redis
+					if idx != activeAssistantIdx {
+						missingSigCallIDs[tc.ID] = true
+						continue
+					}
+
+					// 仅对当前正在执行、等待结果的末端调用探测内存缓存与 Redis
 					sig := ""
 					if v, ok := thoughtSigCache.Load(tc.ID); ok {
 						sig = v.(string)
+					}
+					if sig == "" {
+						if redisSig, err := getSigFromRedis(tc.ID); err == nil && redisSig != "" {
+							sig = redisSig
+							thoughtSigCache.Store(tc.ID, sig)
+						}
 					}
 					if strings.Contains(sig, "placeholder") || len(sig) < 20 {
 						sig = ""
@@ -1432,53 +1475,37 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 				var args map[string]interface{}
 				_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
 
-				sig := ""
-				if tc.ID != "" {
-					if v, ok := thoughtSigCache.Load(tc.ID); ok {
-						sig = v.(string)
-					}
-					if sig == "" {
-						if redisSig, err := getSigFromRedis(tc.ID); err == nil && redisSig != "" {
-							sig = redisSig
-							thoughtSigCache.Store(tc.ID, sig)
-						}
-					}
-				}
-				if sig == "" && tc.Function.Name != "" {
-					if v, ok := thoughtSigCache.Load(tc.Function.Name); ok {
-						sig = v.(string)
-					}
-					if sig == "" {
-						if redisSig, err := getSigFromRedis(tc.Function.Name); err == nil && redisSig != "" {
-							sig = redisSig
-							thoughtSigCache.Store(tc.Function.Name, sig)
-						}
-					}
-				}
-				// 丢弃占位符与非法短签名，防止 Base64 崩溃与 Corrupted 报错
-				if strings.Contains(sig, "placeholder") || len(sig) < 20 {
-					sig = ""
-				}
-
-				if sig != "" {
-					// 拥有真实 thoughtSignature，安全作为原生 FunctionCall 发送给 Google
-					parts = append(parts, GooglePart{
-						ThoughtSignature: sig,
-						FunctionCall: &GoogleFunctionCall{
-							Name: tc.Function.Name,
-							Args: args,
-							ID:   tc.ID,
-						},
-					})
-				} else {
-					// 🎯 核心解决: Google Gemini 3.8 校验
-					// "Function call is missing a thought_signature in functionCall parts."
-					// 当丢失精确 thoughtSignature 时（例如 Pod 重启），该次调用与匹配的工具响应必须同步以自然语言呈现，
-					// 彻底终结 Google 对 thought_signature 的强制验签，同时保持历史时序的完美连贯！
+				if missingSigCallIDs[tc.ID] {
+					// 历史调用或缺失签名的调用，以自然语言直接呈现给 Google，Google 0 验签完美放行
 					argsStr := tc.Function.Arguments
 					parts = append(parts, GooglePart{
 						Text: fmt.Sprintf("I executed `%s` with input: %s", tc.Function.Name, argsStr),
 					})
+				} else {
+					sig := ""
+					if v, ok := thoughtSigCache.Load(tc.ID); ok {
+						sig = v.(string)
+					}
+					if strings.Contains(sig, "placeholder") || len(sig) < 20 {
+						sig = ""
+					}
+
+					if sig != "" {
+						// 拥有真实 thoughtSignature，安全作为原生 FunctionCall 发送给 Google
+						parts = append(parts, GooglePart{
+							ThoughtSignature: sig,
+							FunctionCall: &GoogleFunctionCall{
+								Name: tc.Function.Name,
+								Args: args,
+								ID:   tc.ID,
+							},
+						})
+					} else {
+						argsStr := tc.Function.Arguments
+						parts = append(parts, GooglePart{
+							Text: fmt.Sprintf("I executed `%s` with input: %s", tc.Function.Name, argsStr),
+						})
+					}
 				}
 			}
 			if len(parts) > 0 {
