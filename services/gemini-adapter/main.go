@@ -1005,7 +1005,7 @@ func handleOpenAIUpstreamProxy(c *gin.Context, req OpenAIChatRequest, mCfg *Mode
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	httpReq.Header.Set("User-Agent", "higress-ai-gateway/2.0")
 
-	client := &http.Client{Timeout: 180 * time.Second}
+	client := &http.Client{Timeout: 600 * time.Second}
 	resp, err := client.Do(httpReq)
 
 	// 🛡️ 声明式熔断降级 (Fallback): 根据 config.yaml 的 fallback 字段
@@ -1068,7 +1068,7 @@ func handleOpenAIUpstreamProxy(c *gin.Context, req OpenAIChatRequest, mCfg *Mode
 
 		scanner := bufio.NewScanner(resp.Body)
 		buf := make([]byte, 64*1024)
-		scanner.Buffer(buf, 1024*1024)
+		scanner.Buffer(buf, 4*1024*1024)
 
 		fullResponseText := ""
 		promptTokens := 0
@@ -1596,7 +1596,7 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("User-Agent", "litellm/1.97.0")
 
-	client := &http.Client{Timeout: 120 * time.Second}
+	client := &http.Client{Timeout: 600 * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("Google API request failed: %v", err)})
@@ -1622,7 +1622,7 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 
 		scanner := bufio.NewScanner(resp.Body)
 		buf := make([]byte, 64*1024)
-		scanner.Buffer(buf, 1024*1024)
+		scanner.Buffer(buf, 4*1024*1024)
 
 		hasToolCalls := false
 		var streamToolCalls []gin.H
@@ -2185,7 +2185,7 @@ func handleGeminiNativeProxy(c *gin.Context, defaultAPIKey string) {
 	httpReq.Header.Set("User-Agent", "litellm/1.97.0")
 	httpReq.Header.Set("x-goog-api-key", key)
 
-	client := &http.Client{Timeout: 120 * time.Second}
+	client := &http.Client{Timeout: 600 * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("failed calling Google AI Studio: %v", err)})
