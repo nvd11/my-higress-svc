@@ -1069,14 +1069,14 @@ func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promp
 			}
 		}
 
-		totalTokens := promptTokens + completionTokens
+		totalTokens := promptTokens + completionTokens + reasoningTokens
 		provider := "higress-gemini"
 		providerKeyAlias := "OPENAI_API_KEY_FREE_3"
 
-		// 默认费率计算基准 (USD / 1M Tokens)
-		promptPrice := 0.075
-		compPrice := 0.30
-		cachePrice := 0.01875
+		// 默认费率计算基准 (USD / 1M Tokens，对齐 Google Gemini 3.8 Flash 官方 Standard Paid Tier)
+		promptPrice := 0.750
+		compPrice := 3.750
+		cachePrice := 0.075
 
 		// 🎯 动态模型配置与费率解析
 		mCfg := FindModelConfig(modelReq)
@@ -1090,19 +1090,14 @@ func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promp
 			if mCfg.APIKey != "" {
 				providerKeyAlias = strings.TrimPrefix(mCfg.APIKey, "os.environ/")
 			}
-			costUSD, promptPrice, cachePrice, compPrice = mCfg.CalculatePrice(promptTokens, cacheReadTokens, completionTokens)
+			// Google 官方计费规范: Output price (including thinking tokens)
+			costUSD, promptPrice, cachePrice, compPrice = mCfg.CalculatePrice(promptTokens, cacheReadTokens, completionTokens+reasoningTokens)
 		} else {
-			// 备用兜底逻辑: 阶梯计费 > 128k
-			if promptTokens > 128000 {
-				promptPrice = 0.150
-				compPrice = 0.600
-				cachePrice = 0.0375
-			}
 			nonCachedTokens := promptTokens - cacheReadTokens
 			if nonCachedTokens < 0 {
 				nonCachedTokens = 0
 			}
-			costUSD = (float64(nonCachedTokens)*promptPrice + float64(cacheReadTokens)*cachePrice + float64(completionTokens)*compPrice) / 1000000.0
+			costUSD = (float64(nonCachedTokens)*promptPrice + float64(cacheReadTokens)*cachePrice + float64(completionTokens+reasoningTokens)*compPrice) / 1000000.0
 		}
 		fxRate := 7.2300
 		costCNY := costUSD * fxRate
