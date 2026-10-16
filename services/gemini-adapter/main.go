@@ -668,12 +668,109 @@ type GoogleContent struct {
 	Parts []GooglePart `json:"parts"`
 }
 
+type GoogleInlineData struct {
+	MimeType string `json:"mimeType"`
+	Data     string `json:"data"`
+}
+
 type GooglePart struct {
 	Text             string                  `json:"text,omitempty"`
+	InlineData       *GoogleInlineData       `json:"inlineData,omitempty"`
 	Thought          bool                    `json:"thought,omitempty"`
 	ThoughtSignature string                  `json:"thoughtSignature,omitempty"`
 	FunctionCall     *GoogleFunctionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *GoogleFunctionResponse `json:"functionResponse,omitempty"`
+}
+
+func parseDataURI(uri string) (string, string, bool) {
+	trimmed := strings.TrimSpace(uri)
+	if !strings.HasPrefix(trimmed, "data:") {
+		return "", "", false
+	}
+	idx := strings.Index(trimmed, ";base64,")
+	if idx == -1 {
+		return "", "", false
+	}
+	mime := strings.TrimPrefix(trimmed[:idx], "data:")
+	if mime == "" {
+		mime = "image/png"
+	}
+	data := strings.TrimSpace(trimmed[idx+len(";base64,"):])
+	if data == "" {
+		return "", "", false
+	}
+	return mime, data, true
+}
+
+// extractGooglePartsFromContent 将 OpenAI string 或多模态数组 ([]interface{}) 精准转换为 GooglePart 列表 (支持原生 inlineData 图片/文件)
+func extractGooglePartsFromContent(content interface{}) []GooglePart {
+	if content == nil {
+		return nil
+	}
+	switch v := content.(type) {
+	case string:
+		if v == "" {
+			return nil
+		}
+		if mime, data, ok := parseDataURI(v); ok {
+			return []GooglePart{{InlineData: &GoogleInlineData{MimeType: mime, Data: data}}}
+		}
+		return []GooglePart{{Text: v}}
+	case []interface{}:
+		var parts []GooglePart
+		for _, item := range v {
+			m, ok := item.(map[string]interface{})
+			if !ok {
+				b, _ := json.Marshal(item)
+				if len(b) > 0 {
+					parts = append(parts, GooglePart{Text: string(b)})
+				}
+				continue
+			}
+			partType, _ := m["type"].(string)
+			switch partType {
+			case "text", "input_text":
+				if txt, ok := m["text"].(string); ok && txt != "" {
+					parts = append(parts, GooglePart{Text: txt})
+				}
+			case "image_url", "input_image":
+				urlStr := ""
+				if imgMap, ok := m["image_url"].(map[string]interface{}); ok {
+					urlStr, _ = imgMap["url"].(string)
+				} else if u, ok := m["image_url"].(string); ok {
+					urlStr = u
+				} else if u, ok := m["url"].(string); ok {
+					urlStr = u
+				}
+				if mime, data, ok := parseDataURI(urlStr); ok {
+					parts = append(parts, GooglePart{
+						InlineData: &GoogleInlineData{
+							MimeType: mime,
+							Data:     data,
+						},
+					})
+				} else if urlStr != "" {
+					parts = append(parts, GooglePart{Text: fmt.Sprintf("[Image: %s]", urlStr)})
+				}
+			default:
+				if txt, ok := m["text"].(string); ok && txt != "" {
+					parts = append(parts, GooglePart{Text: txt})
+				} else {
+					b, _ := json.Marshal(m)
+					if len(b) > 0 {
+						parts = append(parts, GooglePart{Text: string(b)})
+					}
+				}
+			}
+		}
+		return parts
+	default:
+		b, _ := json.Marshal(v)
+		if len(b) == 0 {
+			return nil
+		}
+		return []GooglePart{{Text: string(b)}}
+	}
 }
 
 type GoogleFunctionCall struct {
@@ -1566,10 +1663,13 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 		}
 
 		if msg.Role == "user" {
-			gReq.Contents = append(gReq.Contents, GoogleContent{
-				Role:  "user",
-				Parts: []GooglePart{{Text: contentStr}},
-			})
+			userParts := extractGooglePartsFromContent(msg.Content)
+			if len(userParts) > 0 {
+				gReq.Contents = append(gReq.Contents, GoogleContent{
+					Role:  "user",
+					Parts: userParts,
+				})
+			}
 			continue
 		}
 
@@ -1818,7 +1918,15 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 	}
 	if err != nil {
 		if streamHeadersFlushed {
-			_, _ = c.Writer.Write([]byte(fmt.Sprintf("data: {\"error\":{\"message\":\"Google API request failed: %v\"}}\n\ndata: [DONE]\n\n", err)))
+			errChunk := gin.H{
+				"error": gin.H{
+					"message": fmt.Sprintf("Google API request failed: %v", err),
+					"type":    "upstream_error",
+					"code":    http.StatusBadGateway,
+				},
+			}
+			b, _ := json.Marshal(errChunk)
+			_, _ = c.Writer.Write([]byte(fmt.Sprintf("data: %s\n\ndata: [DONE]\n\n", string(b))))
 			if flusher != nil {
 				flusher.Flush()
 			}
@@ -1831,9 +1939,25 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 
 	if resp.StatusCode >= 400 {
 		errBody, _ := io.ReadAll(resp.Body)
-		log.Printf("❌ Google API Error (%d): %s", resp.StatusCode, string(errBody))
+		errStr := strings.TrimSpace(string(errBody))
+		log.Printf("❌ Google API Error (%d): %s", resp.StatusCode, errStr)
+		errID := "chatcmpl-" + uuid.New().String()
+		latency := int(time.Since(startTime).Milliseconds())
+		reportAuditLogAsync(errID, rawAuthHeader, model, realModel, 0, 0, 0, 0, latency, resp.StatusCode, structuredPrompt, "", &errStr)
 		if streamHeadersFlushed {
-			_, _ = c.Writer.Write([]byte(fmt.Sprintf("data: %s\n\ndata: [DONE]\n\n", strings.TrimSpace(string(errBody)))))
+			var compactBuf bytes.Buffer
+			if cErr := json.Compact(&compactBuf, errBody); cErr == nil && compactBuf.Len() > 0 {
+				_, _ = c.Writer.Write([]byte(fmt.Sprintf("data: %s\n\ndata: [DONE]\n\n", compactBuf.String())))
+			} else {
+				errChunk := gin.H{
+					"error": gin.H{
+						"message": errStr,
+						"code":    resp.StatusCode,
+					},
+				}
+				b, _ := json.Marshal(errChunk)
+				_, _ = c.Writer.Write([]byte(fmt.Sprintf("data: %s\n\ndata: [DONE]\n\n", string(b))))
+			}
 			if flusher != nil {
 				flusher.Flush()
 			}

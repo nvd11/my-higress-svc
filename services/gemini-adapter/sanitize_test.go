@@ -352,3 +352,35 @@ func TestFindActiveAssistantIdx(t *testing.T) {
 		t.Fatalf("expected 0 for parallel active tool turn, got %d", idx)
 	}
 }
+
+func TestExtractGooglePartsFromContent_MultimodalImage(t *testing.T) {
+	content := []interface{}{
+		map[string]interface{}{
+			"type": "text",
+			"text": "[Image 1] 为何higress dashboard 打不开了?",
+		},
+		map[string]interface{}{
+			"type": "image_url",
+			"image_url": map[string]interface{}{
+				"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+			},
+		},
+	}
+
+	parts := extractGooglePartsFromContent(content)
+	if len(parts) != 2 {
+		t.Fatalf("expected 2 GoogleParts, got %d", len(parts))
+	}
+	if parts[0].Text != "[Image 1] 为何higress dashboard 打不开了?" {
+		t.Errorf("unexpected text part: %s", parts[0].Text)
+	}
+	if parts[1].InlineData == nil {
+		t.Fatalf("expected second part to have InlineData, got nil")
+	}
+	if parts[1].InlineData.MimeType != "image/png" {
+		t.Errorf("expected mimeType image/png, got %s", parts[1].InlineData.MimeType)
+	}
+	if !strings.HasPrefix(parts[1].InlineData.Data, "iVBORw0KGgo") {
+		t.Errorf("unexpected base64 data: %s", parts[1].InlineData.Data)
+	}
+}
