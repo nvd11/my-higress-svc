@@ -372,15 +372,50 @@ func main() {
 }
 
 func handleModels(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"object": "list",
-		"data": []gin.H{
+	configMutex.RLock()
+	var models []gin.H
+	if appConfig != nil && len(appConfig.ModelList) > 0 {
+		seen := make(map[string]bool)
+		for _, m := range appConfig.ModelList {
+			owner := "google"
+			if m.Provider == "a6api" {
+				owner = "openai"
+			}
+			if !seen[m.ModelName] {
+				seen[m.ModelName] = true
+				models = append(models, gin.H{
+					"id":       m.ModelName,
+					"object":   "model",
+					"owned_by": owner,
+				})
+			}
+			for _, alias := range m.Aliases {
+				if !seen[alias] {
+					seen[alias] = true
+					models = append(models, gin.H{
+						"id":       alias,
+						"object":   "model",
+						"owned_by": owner,
+					})
+				}
+			}
+		}
+	} else {
+		models = []gin.H{
+			{"id": "gemini-4-argon", "object": "model", "owned_by": "google"},
+			{"id": "gemini-4-argon-search", "object": "model", "owned_by": "google"},
+			{"id": "gemini-4", "object": "model", "owned_by": "google"},
 			{"id": "gemini-3.8-flash", "object": "model", "owned_by": "google"},
 			{"id": "gemini-3.8-flash-search", "object": "model", "owned_by": "google"},
 			{"id": "kimi-k3", "object": "model", "owned_by": "moonshot"},
 			{"id": "glm-5.3", "object": "model", "owned_by": "zhipu"},
 			{"id": "gpt-5.6-luna", "object": "model", "owned_by": "openai"},
-		},
+		}
+	}
+	configMutex.RUnlock()
+	c.JSON(http.StatusOK, gin.H{
+		"object": "list",
+		"data":   models,
 	})
 }
 
