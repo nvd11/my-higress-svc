@@ -172,6 +172,39 @@ func getDefaultConfig() *GlobalConfig {
 	return &GlobalConfig{
 		ModelList: []ModelConfig{
 			{
+				ModelName:     "gemini-4-argon",
+				Aliases:       []string{"gemini-4", "gemini-4-flash"},
+				Provider:      "google-gemini",
+				Protocol:      "gemini-native",
+				UpstreamURL:   "https://generativelanguage.googleapis.com",
+				UpstreamModel: "gemini-4-argon",
+				APIKey:        "os.environ/OPENAI_API_KEY_FREE_3",
+				Pricing: ModelPricing{
+					PromptPer1M:      0.150,
+					CompletionPer1M:  0.600,
+					CacheReadPer1M:   0.0375,
+					TieredThreshold:  128000,
+					TieredMultiplier: 2.0,
+				},
+			},
+			{
+				ModelName:     "gemini-4-argon-search",
+				Aliases:       []string{"gemini-4:search", "gemini-4-search"},
+				Provider:      "google-gemini",
+				Protocol:      "gemini-native",
+				UpstreamURL:   "https://generativelanguage.googleapis.com",
+				UpstreamModel: "gemini-4-argon",
+				EnableSearch:  true,
+				APIKey:        "os.environ/OPENAI_API_KEY_FREE_3",
+				Pricing: ModelPricing{
+					PromptPer1M:      0.150,
+					CompletionPer1M:  0.600,
+					CacheReadPer1M:   0.0375,
+					TieredThreshold:  128000,
+					TieredMultiplier: 2.0,
+				},
+			},
+			{
 				ModelName:   "gemini-3.8-flash",
 				Aliases:     []string{"gemini-3.8", "gemini-2.5-flash"},
 				Provider:    "google-gemini",
