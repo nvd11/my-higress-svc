@@ -150,11 +150,11 @@ func cleanJSONStringLiteralNewlines(s string) string {
 	return cleanJSONString(s)
 }
 
-// extractBalancedJSON 寻找从 text 开始或从 '{' 开始的有效最外层 JSON 对象，准确跳过字符串内包含的转义字符与嵌套大括号
-func extractBalancedJSON(s string) (string, bool) {
+// extractBalancedJSONWithEnd 寻找从 s 开始或从 '{' 开始的有效最外层 JSON 对象，返回 JSON 子串、在 s 中的结束索引以及是否成功
+func extractBalancedJSONWithEnd(s string) (string, int, bool) {
 	start := strings.IndexByte(s, '{')
 	if start == -1 {
-		return "", false
+		return "", -1, false
 	}
 	depth := 0
 	inString := false
@@ -181,22 +181,47 @@ func extractBalancedJSON(s string) (string, bool) {
 			} else if b == '}' {
 				depth--
 				if depth == 0 {
-					return s[start : i+1], true
+					return s[start : i+1], i + 1, true
 				}
 			}
 		}
 	}
-	return "", false
+	return "", -1, false
+}
+
+// extractBalancedJSON 寻找从 text 开始或从 '{' 开始的有效最外层 JSON 对象，准确跳过字符串内包含的转义字符与嵌套大括号
+func extractBalancedJSON(s string) (string, bool) {
+	js, _, ok := extractBalancedJSONWithEnd(s)
+	return js, ok
 }
 
 var pseudoCallStarters = []string{
 	"i called",
 	"i executed",
-	"called tool",
-	"assistant invoked",
-	"[assistant invoked",
-	"invoked tool",
 	"i invoked",
+	"called tool",
+	"invoked tool",
+	"executed tool",
+	"assistant invoked",
+	"assistant called",
+	"assistant executed",
+	"[assistant invoked",
+	"[assistant called",
+	"[assistant executed",
+}
+
+func isValidToolNameToken(tok string) bool {
+	if tok == "" {
+		return false
+	}
+	for i := 0; i < len(tok); i++ {
+		c := tok[i]
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+			c == '_' || c == '-' || c == ':' || c == '`' || c == '\'' || c == '"') {
+			return false
+		}
+	}
+	return true
 }
 
 func isPossiblePseudoCallStart(text string) bool {
@@ -204,6 +229,12 @@ func isPossiblePseudoCallStart(text string) bool {
 	lower := strings.ToLower(trimmed)
 	if lower == "" {
 		return false
+	}
+	if pseudoCallPrefixRegex.MatchString(trimmed) {
+		return true
+	}
+	if strings.HasPrefix("null", lower) {
+		return true
 	}
 	if strings.HasPrefix(lower, "null") {
 		sub := strings.TrimSpace(strings.TrimPrefix(lower, "null"))
@@ -213,11 +244,162 @@ func isPossiblePseudoCallStart(text string) bool {
 		lower = sub
 	}
 	for _, s := range pseudoCallStarters {
-		if strings.HasPrefix(s, lower) || strings.HasPrefix(lower, s) {
+		if strings.HasPrefix(s, lower) {
 			return true
+		}
+		if strings.HasPrefix(lower, s) {
+			rest := strings.TrimSpace(lower[len(s):])
+			if rest == "" {
+				return true
+			}
+			fields := strings.Fields(rest)
+			if !strings.HasSuffix(s, "tool") && len(fields) > 0 && fields[0] == "tool" {
+				fields = fields[1:]
+			}
+			switch len(fields) {
+			case 0:
+				return true
+			case 1:
+				return isValidToolNameToken(fields[0])
+			case 2:
+				return isValidToolNameToken(fields[0]) && strings.HasPrefix("with", fields[1])
+			case 3:
+				if !isValidToolNameToken(fields[0]) || fields[1] != "with" {
+					return false
+				}
+				return strings.HasPrefix("args:", fields[2]) ||
+					strings.HasPrefix("arguments:", fields[2]) ||
+					strings.HasPrefix("input:", fields[2])
+			default:
+				return false
+			}
 		}
 	}
 	return false
+}
+
+// findTrailingPseudoCallStartIndex 检查字符串末尾是否包含尚未闭合的伪工具调用前缀，返回其在 s 中的起始字节索引（未命中返回 -1）
+func findTrailingPseudoCallStartIndex(s string) int {
+	if s == "" {
+		return -1
+	}
+	if isPossiblePseudoCallStart(s) {
+		return 0
+	}
+	lineStart := 0
+	if lastNL := strings.LastIndexByte(s, '\n'); lastNL >= 0 {
+		lineStart = lastNL + 1
+	}
+	lastLine := s[lineStart:]
+	if isPossiblePseudoCallStart(lastLine) {
+		return lineStart
+	}
+	lowerLine := strings.ToLower(lastLine)
+	markers := []string{"nulli ", "null[", "[assistant ", "assistant invoked", "assistant called", "assistant executed", "i executed", "i called", "i invoked"}
+	for _, m := range markers {
+		if idx := strings.LastIndex(lowerLine, m); idx > 0 {
+			if isPossiblePseudoCallStart(lastLine[idx:]) {
+				return lineStart + idx
+			}
+		}
+	}
+	return -1
+}
+
+type ParsedPseudoCall struct {
+	Name string
+	Args string
+}
+
+// processStreamPseudoBuffer 流式伪工具调用状态机：
+// 支持前置对话文本剥离、跨分片前缀缓冲、以及单次响应中连续多个伪工具调用的循环提取
+func processStreamPseudoBuffer(bufStr string, allowTools bool, forceFlush bool) (emittedTexts []string, emittedCalls []ParsedPseudoCall, remaining string) {
+	if bufStr == "" {
+		return nil, nil, ""
+	}
+	if !allowTools {
+		return []string{bufStr}, nil, ""
+	}
+
+	for len(bufStr) > 0 {
+		loc := pseudoCallPrefixRegex.FindStringSubmatchIndex(bufStr)
+		if len(loc) >= 4 {
+			if loc[0] > 0 {
+				emittedTexts = append(emittedTexts, bufStr[:loc[0]])
+				bufStr = bufStr[loc[0]:]
+				loc = pseudoCallPrefixRegex.FindStringSubmatchIndex(bufStr)
+				if len(loc) < 4 {
+					continue
+				}
+			}
+
+			fnName := bufStr[loc[2]:loc[3]]
+			afterPrefix := bufStr[loc[1]:]
+			trimmedAfter := strings.TrimLeft(afterPrefix, " \t\r\n")
+
+			if trimmedAfter == "" {
+				if forceFlush {
+					emittedTexts = append(emittedTexts, bufStr)
+					return emittedTexts, emittedCalls, ""
+				}
+				return emittedTexts, emittedCalls, bufStr
+			}
+
+			if trimmedAfter[0] != '{' {
+				emittedTexts = append(emittedTexts, bufStr[:loc[1]])
+				bufStr = bufStr[loc[1]:]
+				continue
+			}
+
+			jsonStr, endIdx, okJSON := extractBalancedJSONWithEnd(afterPrefix)
+			if !okJSON {
+				if forceFlush || len(bufStr) > 65536 {
+					emittedTexts = append(emittedTexts, bufStr)
+					return emittedTexts, emittedCalls, ""
+				}
+				return emittedTexts, emittedCalls, bufStr
+			}
+
+			cleanedJSON := cleanJSONString(jsonStr)
+			var js map[string]interface{}
+			validArgs := ""
+			if err := json.Unmarshal([]byte(cleanedJSON), &js); err == nil {
+				validArgs = cleanedJSON
+			} else if repairedJSON, okRepair := repairLooseJSON(cleanedJSON); okRepair {
+				validArgs = repairedJSON
+			}
+
+			if validArgs != "" {
+				emittedCalls = append(emittedCalls, ParsedPseudoCall{
+					Name: fnName,
+					Args: validArgs,
+				})
+				bufStr = afterPrefix[endIdx:]
+				bufStr = strings.TrimPrefix(strings.TrimPrefix(bufStr, "\r\n"), "\n")
+				continue
+			}
+
+			// 闭合大括号内不是合法 JSON，作为普通文本释放前段并继续检查剩余部分
+			emittedTexts = append(emittedTexts, bufStr[:loc[1]+endIdx])
+			bufStr = afterPrefix[endIdx:]
+			continue
+		}
+
+		// 尚未完整匹配到 pseudoCallPrefixRegex，检查尾部是否处于伪调用前缀的半截状态
+		if !forceFlush {
+			if splitIdx := findTrailingPseudoCallStartIndex(bufStr); splitIdx >= 0 {
+				if splitIdx > 0 {
+					emittedTexts = append(emittedTexts, bufStr[:splitIdx])
+				}
+				return emittedTexts, emittedCalls, bufStr[splitIdx:]
+			}
+		}
+
+		emittedTexts = append(emittedTexts, bufStr)
+		return emittedTexts, emittedCalls, ""
+	}
+
+	return emittedTexts, emittedCalls, ""
 }
 
 func repairLooseJSON(s string) (string, bool) {
@@ -279,7 +461,7 @@ func emitTextDelta(c *gin.Context, flusher http.Flusher, chatCmplID string, crea
 	}
 }
 
-func emitToolCallDelta(c *gin.Context, flusher http.Flusher, chatCmplID string, created int64, model string, callID, fnName, fnArgs string) {
+func emitToolCallDelta(c *gin.Context, flusher http.Flusher, chatCmplID string, created int64, model string, toolIndex int, callID, fnName, fnArgs string) {
 	chunk := gin.H{
 		"id":      chatCmplID,
 		"object":  "chat.completion.chunk",
@@ -291,7 +473,7 @@ func emitToolCallDelta(c *gin.Context, flusher http.Flusher, chatCmplID string, 
 				"delta": gin.H{
 					"tool_calls": []gin.H{
 						{
-							"index": 0,
+							"index": toolIndex,
 							"id":    callID,
 							"type":  "function",
 							"function": gin.H{
@@ -1597,8 +1779,56 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 	httpReq.Header.Set("User-Agent", "litellm/1.97.0")
 
 	client := &http.Client{Timeout: 600 * time.Second}
-	resp, err := client.Do(httpReq)
+	var resp *http.Response
+	streamHeadersFlushed := false
+	flusher, _ := c.Writer.(http.Flusher)
+
+	if req.Stream {
+		type doRes struct {
+			r   *http.Response
+			err error
+		}
+		doCh := make(chan doRes, 1)
+		go func() {
+			r, e := client.Do(httpReq)
+			doCh <- doRes{r: r, err: e}
+		}()
+
+		doTicker := time.NewTicker(15 * time.Second)
+		defer doTicker.Stop()
+
+	waitDo:
+		for {
+			select {
+			case res := <-doCh:
+				resp = res.r
+				err = res.err
+				break waitDo
+			case <-doTicker.C:
+				if !streamHeadersFlushed {
+					c.Header("Content-Type", "text/event-stream")
+					c.Header("Cache-Control", "no-cache")
+					c.Header("Connection", "keep-alive")
+					c.Header("X-Accel-Buffering", "no")
+					streamHeadersFlushed = true
+				}
+				_, _ = c.Writer.Write([]byte(": keep-alive\n\n"))
+				if flusher != nil {
+					flusher.Flush()
+				}
+			}
+		}
+	} else {
+		resp, err = client.Do(httpReq)
+	}
 	if err != nil {
+		if streamHeadersFlushed {
+			_, _ = c.Writer.Write([]byte(fmt.Sprintf("data: {\"error\":{\"message\":\"Google API request failed: %v\"}}\n\ndata: [DONE]\n\n", err)))
+			if flusher != nil {
+				flusher.Flush()
+			}
+			return
+		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("Google API request failed: %v", err)})
 		return
 	}
@@ -1607,6 +1837,13 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 	if resp.StatusCode >= 400 {
 		errBody, _ := io.ReadAll(resp.Body)
 		log.Printf("❌ Google API Error (%d): %s", resp.StatusCode, string(errBody))
+		if streamHeadersFlushed {
+			_, _ = c.Writer.Write([]byte(fmt.Sprintf("data: %s\n\ndata: [DONE]\n\n", strings.TrimSpace(string(errBody)))))
+			if flusher != nil {
+				flusher.Flush()
+			}
+			return
+		}
 		c.Data(resp.StatusCode, resp.Header.Get("Content-Type"), errBody)
 		return
 	}
@@ -1615,10 +1852,18 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 	created := time.Now().Unix()
 
 	if req.Stream {
-		c.Header("Content-Type", "text/event-stream")
-		c.Header("Cache-Control", "no-cache")
-		c.Header("Connection", "keep-alive")
-		flusher, _ := c.Writer.(http.Flusher)
+		if !streamHeadersFlushed {
+			c.Header("Content-Type", "text/event-stream")
+			c.Header("Cache-Control", "no-cache")
+			c.Header("Connection", "keep-alive")
+			c.Header("X-Accel-Buffering", "no")
+			streamHeadersFlushed = true
+		}
+		// 立即下发首帧 SSE 心跳注释，确保 Cloudflare / Kong 立即感知流式连接已活跃，杜绝 120s 静默 524 超时
+		_, _ = c.Writer.Write([]byte(": keep-alive\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
 
 		scanner := bufio.NewScanner(resp.Body)
 		buf := make([]byte, 64*1024)
@@ -1635,8 +1880,35 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 		cacheReadTokens := 0
 		var pendingPseudoBuf strings.Builder
 
-		for scanner.Scan() {
-			line := scanner.Text()
+		lineCh := make(chan string, 64)
+		go func() {
+			defer close(lineCh)
+			for scanner.Scan() {
+				lineCh <- scanner.Text()
+			}
+		}()
+
+		hbTicker := time.NewTicker(15 * time.Second)
+		defer hbTicker.Stop()
+
+		blockedBySafety := false
+
+	streamLoop:
+		for {
+			var line string
+			var ok bool
+			select {
+			case line, ok = <-lineCh:
+				if !ok {
+					break streamLoop
+				}
+			case <-hbTicker.C:
+				_, _ = c.Writer.Write([]byte(": keep-alive\n\n"))
+				if flusher != nil {
+					flusher.Flush()
+				}
+				continue
+			}
 			if !strings.HasPrefix(line, "data: ") {
 				continue
 			}
@@ -1678,6 +1950,7 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 				if flusher != nil {
 					flusher.Flush()
 				}
+				blockedBySafety = true
 				break
 			}
 
@@ -1703,66 +1976,34 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 			}
 			for _, part := range cand.Content.Parts {
 				if part.Text != "" {
-					textChunk := part.Text
-
-					// 🎯 核心防幻觉拦截: 捕获并缓冲以 "I called tool", "Assistant invoked tool" 等开头的流式片段
-					if pendingPseudoBuf.Len() > 0 || isPossiblePseudoCallStart(textChunk) || pseudoCallPrefixRegex.MatchString(textChunk) {
-						// 若缓冲区为空，且当前 chunk 前部包含普通对话文本，先将前置对话文本立即刷流下发
-						if pendingPseudoBuf.Len() == 0 {
-							if loc := pseudoCallPrefixRegex.FindStringIndex(textChunk); len(loc) >= 2 && loc[0] > 0 {
-								convPrefix := textChunk[:loc[0]]
-								fullResponseText += convPrefix
-								emitTextDelta(c, flusher, chatCmplID, created, model, convPrefix)
-								textChunk = textChunk[loc[0]:]
-							}
-						}
-
-						pendingPseudoBuf.WriteString(textChunk)
-						buffered := pendingPseudoBuf.String()
-						// 如果包含了闭合大括号 '}'，尝试完整匹配解析
-						if strings.Contains(buffered, "}") {
-							if prefixText, fnName, fnArgs, ok := extractConversationalAndPseudoToolCall(buffered); ok && len(req.Tools) > 0 {
-								if prefixText != "" {
-									fullResponseText += prefixText
-									emitTextDelta(c, flusher, chatCmplID, created, model, prefixText)
-								}
-								hasToolCalls = true
-								callID := "call_" + uuid.New().String()[:8]
-								callIDToName.Store(callID, fnName)
-								tcObj := gin.H{
-									"id":   callID,
-									"type": "function",
-									"function": gin.H{
-										"name":      fnName,
-										"arguments": fnArgs,
-									},
-								}
-								streamToolCalls = append(streamToolCalls, tcObj)
-								emitToolCallDelta(c, flusher, chatCmplID, created, model, callID, fnName, fnArgs)
-								pendingPseudoBuf.Reset()
-								continue
-							}
-						}
-						// 若缓冲区的现有前缀已不再可能是任何已知的伪调用前缀，立即刷盘释放（保证正常文本的零延迟）
-						if !isPossiblePseudoCallStart(buffered) && !pseudoCallPrefixRegex.MatchString(buffered) {
-							flushStr := pendingPseudoBuf.String()
-							pendingPseudoBuf.Reset()
-							fullResponseText += flushStr
-							emitTextDelta(c, flusher, chatCmplID, created, model, flushStr)
-							continue
-						}
-						// 如果累积超过 65536 字符且仍然无法匹配为工具调用，放弃缓冲并正常下发
-						if pendingPseudoBuf.Len() > 65536 {
-							flushStr := pendingPseudoBuf.String()
-							pendingPseudoBuf.Reset()
-							fullResponseText += flushStr
-							emitTextDelta(c, flusher, chatCmplID, created, model, flushStr)
-						}
-						continue
+					pendingPseudoBuf.WriteString(part.Text)
+					texts, calls, rem := processStreamPseudoBuffer(pendingPseudoBuf.String(), len(req.Tools) > 0, false)
+					pendingPseudoBuf.Reset()
+					if rem != "" {
+						pendingPseudoBuf.WriteString(rem)
 					}
-
-					fullResponseText += textChunk
-					emitTextDelta(c, flusher, chatCmplID, created, model, textChunk)
+					for _, t := range texts {
+						if t != "" {
+							fullResponseText += t
+							emitTextDelta(c, flusher, chatCmplID, created, model, t)
+						}
+					}
+					for _, sc := range calls {
+						hasToolCalls = true
+						callID := "call_" + uuid.New().String()[:8]
+						callIDToName.Store(callID, sc.Name)
+						toolIdx := len(streamToolCalls)
+						tcObj := gin.H{
+							"id":   callID,
+							"type": "function",
+							"function": gin.H{
+								"name":      sc.Name,
+								"arguments": sc.Args,
+							},
+						}
+						streamToolCalls = append(streamToolCalls, tcObj)
+						emitToolCallDelta(c, flusher, chatCmplID, created, model, toolIdx, callID, sc.Name, sc.Args)
+					}
 				}
 
 				if part.FunctionCall != nil {
@@ -1783,6 +2024,7 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 						thoughtSigCache.Store(callID, part.ThoughtSignature)
 					}
 
+					toolIdx := len(streamToolCalls)
 					tcObj := gin.H{
 						"id":   callID,
 						"type": "function",
@@ -1792,129 +2034,87 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 						},
 					}
 					streamToolCalls = append(streamToolCalls, tcObj)
-
-					chunk := gin.H{
-						"id":      chatCmplID,
-						"object":  "chat.completion.chunk",
-						"created": created,
-						"model":   model,
-						"choices": []gin.H{
-							{
-								"index": 0,
-								"delta": gin.H{
-									"tool_calls": []gin.H{
-										{
-											"index": 0,
-											"id":    callID,
-											"type":  "function",
-											"function": gin.H{
-												"name":      part.FunctionCall.Name,
-												"arguments": string(argsBytes),
-											},
-										},
-									},
-								},
-								"finish_reason": nil,
-							},
-						},
-					}
-					chunkBytes, _ := json.Marshal(chunk)
-					_, _ = c.Writer.Write([]byte(fmt.Sprintf("data: %s\n\n", string(chunkBytes))))
-					if flusher != nil {
-						flusher.Flush()
-					}
-				}
-			}
-
-			if cand.FinishReason != "" {
-				// 若存在联网搜索引用的信源，且不是纯工具调用，将信源优雅追加在末尾
-				if len(sources) > 0 && !hasToolCalls {
-					sourceBlock := "\n\n🌐 **网络参考信源**:\n" + strings.Join(sources, "\n")
-					sourceChunk := gin.H{
-						"id":      chatCmplID,
-						"object":  "chat.completion.chunk",
-						"created": created,
-						"model":   model,
-						"choices": []gin.H{
-							{
-								"index":         0,
-								"delta":         gin.H{"content": sourceBlock},
-								"finish_reason": nil,
-							},
-						},
-					}
-					chunkBytes, _ := json.Marshal(sourceChunk)
-					_, _ = c.Writer.Write([]byte(fmt.Sprintf("data: %s\n\n", string(chunkBytes))))
-					if flusher != nil {
-						flusher.Flush()
-					}
-					sources = nil // 仅发一次
-				}
-
-				finishReason := "stop"
-				if hasToolCalls {
-					finishReason = "tool_calls"
-				}
-
-				usage := gin.H{}
-				if promptTokens > 0 || completionTokens > 0 || reasoningTokens > 0 {
-					usage = gin.H{
-						"prompt_tokens":     promptTokens,
-						"completion_tokens": completionTokens,
-						"total_tokens":      promptTokens + completionTokens,
-						"completion_tokens_details": gin.H{
-							"reasoning_tokens": reasoningTokens,
-						},
-					}
-				}
-
-				finalChunk := gin.H{
-					"id":      chatCmplID,
-					"object":  "chat.completion.chunk",
-					"created": created,
-					"model":   model,
-					"choices": []gin.H{
-						{
-							"index":         0,
-							"delta":         gin.H{},
-							"finish_reason": finishReason,
-						},
-					},
-					"usage": usage,
-				}
-				chunkBytes, _ := json.Marshal(finalChunk)
-				_, _ = c.Writer.Write([]byte(fmt.Sprintf("data: %s\n\n", string(chunkBytes))))
-				if flusher != nil {
-					flusher.Flush()
+					emitToolCallDelta(c, flusher, chatCmplID, created, model, toolIdx, callID, part.FunctionCall.Name, string(argsBytes))
 				}
 			}
 		}
 
+		// 流结束后排空缓冲区（必须先于 finalChunk 的 finish_reason 发送）
 		if pendingPseudoBuf.Len() > 0 {
-			buffered := pendingPseudoBuf.String()
-			if prefixText, fnName, fnArgs, ok := extractConversationalAndPseudoToolCall(buffered); ok && len(req.Tools) > 0 {
-				if prefixText != "" {
-					fullResponseText += prefixText
-					emitTextDelta(c, flusher, chatCmplID, created, model, prefixText)
+			texts, calls, rem := processStreamPseudoBuffer(pendingPseudoBuf.String(), len(req.Tools) > 0, true)
+			pendingPseudoBuf.Reset()
+			for _, t := range texts {
+				if t != "" {
+					fullResponseText += t
+					emitTextDelta(c, flusher, chatCmplID, created, model, t)
 				}
+			}
+			if rem != "" {
+				fullResponseText += rem
+				emitTextDelta(c, flusher, chatCmplID, created, model, rem)
+			}
+			for _, sc := range calls {
 				hasToolCalls = true
 				callID := "call_" + uuid.New().String()[:8]
-				callIDToName.Store(callID, fnName)
+				callIDToName.Store(callID, sc.Name)
+				toolIdx := len(streamToolCalls)
 				tcObj := gin.H{
 					"id":   callID,
 					"type": "function",
 					"function": gin.H{
-						"name":      fnName,
-						"arguments": fnArgs,
+						"name":      sc.Name,
+						"arguments": sc.Args,
 					},
 				}
 				streamToolCalls = append(streamToolCalls, tcObj)
-				emitToolCallDelta(c, flusher, chatCmplID, created, model, callID, fnName, fnArgs)
-			} else {
-				fullResponseText += buffered
-				emitTextDelta(c, flusher, chatCmplID, created, model, buffered)
+				emitToolCallDelta(c, flusher, chatCmplID, created, model, toolIdx, callID, sc.Name, sc.Args)
 			}
-			pendingPseudoBuf.Reset()
+		}
+
+		if !blockedBySafety {
+			// 若存在联网搜索引用的信源，且不是纯工具调用，将信源优雅追加在末尾
+			if len(sources) > 0 && !hasToolCalls {
+				sourceBlock := "\n\n🌐 **网络参考信源**:\n" + strings.Join(sources, "\n")
+				emitTextDelta(c, flusher, chatCmplID, created, model, sourceBlock)
+				sources = nil
+			}
+
+			finishReason := "stop"
+			if hasToolCalls {
+				finishReason = "tool_calls"
+			}
+
+			usage := gin.H{}
+			if promptTokens > 0 || completionTokens > 0 || reasoningTokens > 0 {
+				usage = gin.H{
+					"prompt_tokens":     promptTokens,
+					"completion_tokens": completionTokens,
+					"total_tokens":      promptTokens + completionTokens,
+					"completion_tokens_details": gin.H{
+						"reasoning_tokens": reasoningTokens,
+					},
+				}
+			}
+
+			finalChunk := gin.H{
+				"id":      chatCmplID,
+				"object":  "chat.completion.chunk",
+				"created": created,
+				"model":   model,
+				"choices": []gin.H{
+					{
+						"index":         0,
+						"delta":         gin.H{},
+						"finish_reason": finishReason,
+					},
+				},
+				"usage": usage,
+			}
+			chunkBytes, _ := json.Marshal(finalChunk)
+			_, _ = c.Writer.Write([]byte(fmt.Sprintf("data: %s\n\n", string(chunkBytes))))
+			if flusher != nil {
+				flusher.Flush()
+			}
 		}
 
 		_, _ = c.Writer.Write([]byte("data: [DONE]\n\n"))
@@ -1969,23 +2169,25 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 
 	for _, part := range cand.Content.Parts {
 		if part.Text != "" {
-			if prefixText, fnName, fnArgs, ok := extractConversationalAndPseudoToolCall(part.Text); ok && len(req.Tools) > 0 {
-				if prefixText != "" {
-					outContent += prefixText
-				}
+			texts, calls, rem := processStreamPseudoBuffer(part.Text, len(req.Tools) > 0, true)
+			for _, t := range texts {
+				outContent += t
+			}
+			if rem != "" {
+				outContent += rem
+			}
+			for _, sc := range calls {
 				callID := "call_" + uuid.New().String()[:8]
-				callIDToName.Store(callID, fnName)
+				callIDToName.Store(callID, sc.Name)
 				outToolCalls = append(outToolCalls, gin.H{
 					"id":   callID,
 					"type": "function",
 					"function": gin.H{
-						"name":      fnName,
-						"arguments": fnArgs,
+						"name":      sc.Name,
+						"arguments": sc.Args,
 					},
 				})
-				continue
 			}
-			outContent += part.Text
 		}
 		if part.FunctionCall != nil {
 			if len(req.Tools) == 0 {

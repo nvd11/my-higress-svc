@@ -197,3 +197,86 @@ func TestStreamBufferNormalTextNoLeakOrHanging(t *testing.T) {
 		t.Fatalf("normal text was mistakenly blocked: '%s'", fullText)
 	}
 }
+
+// TestProcessStreamPseudoBuffer_ThinkingProcessTailSplit 验证 Thinking Process 与半截 I executed 同处一个分片时的精确剥离与拦截
+func TestProcessStreamPseudoBuffer_ThinkingProcessTailSplit(t *testing.T) {
+	chunks := []string{
+		"Thinking Process:\n\nLet's run `CGO_ENABLED=0 go test -v .`, commit, push, watch the GitHub Actions build, and update the K3s deployment!\n\n\nI executed ",
+		"`bash` with",
+		" input: {\"command\":\"CGO_ENABLED=0 go test -v . && \\\\\\ngit -C /home/gateman/projects/github/my-higress-svc add services/gemini-adapter/main.go\",\"timeout\":30000,\"workdir\":\"/home/gateman/projects/github/my-higress-svc/services/gemini-adapter\"}\n",
+	}
+
+	var pendingBuf strings.Builder
+	var outTexts []string
+	var outCalls []ParsedPseudoCall
+
+	for _, ch := range chunks {
+		pendingBuf.WriteString(ch)
+		texts, calls, rem := processStreamPseudoBuffer(pendingBuf.String(), true, false)
+		pendingBuf.Reset()
+		if rem != "" {
+			pendingBuf.WriteString(rem)
+		}
+		outTexts = append(outTexts, texts...)
+		outCalls = append(outCalls, calls...)
+	}
+	if pendingBuf.Len() > 0 {
+		texts, calls, rem := processStreamPseudoBuffer(pendingBuf.String(), true, true)
+		outTexts = append(outTexts, texts...)
+		if rem != "" {
+			outTexts = append(outTexts, rem)
+		}
+		outCalls = append(outCalls, calls...)
+	}
+
+	fullText := strings.Join(outTexts, "")
+	if strings.Contains(fullText, "I executed") || strings.Contains(fullText, "workdir") {
+		t.Fatalf("pseudo tool call leaked into plain text: %s", fullText)
+	}
+	if len(outCalls) != 1 || outCalls[0].Name != "bash" {
+		t.Fatalf("expected 1 bash tool call, got: %+v", outCalls)
+	}
+}
+
+// TestProcessStreamPseudoBuffer_MultipleParallelToolCallsAcrossChunks 验证单轮连续多个伪工具调用跨分片时不丢失后半段
+func TestProcessStreamPseudoBuffer_MultipleParallelToolCallsAcrossChunks(t *testing.T) {
+	chunks := []string{
+		"Thinking Process:\nLet's check both in parallel!\n\nI executed `read` with input: {\"filePath\":\"/home/gateman/.config/opencode/users-it-assests/",
+		"browser_automation.md\"}\nI executed `webfetch` with input: {\"format\":\"markdown\",\"url\":\"https://blog.csdn.net/",
+		"nvd11/article/details/166495870\"}\n",
+	}
+
+	var pendingBuf strings.Builder
+	var outTexts []string
+	var outCalls []ParsedPseudoCall
+
+	for _, ch := range chunks {
+		pendingBuf.WriteString(ch)
+		texts, calls, rem := processStreamPseudoBuffer(pendingBuf.String(), true, false)
+		pendingBuf.Reset()
+		if rem != "" {
+			pendingBuf.WriteString(rem)
+		}
+		outTexts = append(outTexts, texts...)
+		outCalls = append(outCalls, calls...)
+	}
+	if pendingBuf.Len() > 0 {
+		texts, calls, rem := processStreamPseudoBuffer(pendingBuf.String(), true, true)
+		outTexts = append(outTexts, texts...)
+		if rem != "" {
+			outTexts = append(outTexts, rem)
+		}
+		outCalls = append(outCalls, calls...)
+	}
+
+	fullText := strings.Join(outTexts, "")
+	if strings.Contains(fullText, "browser_automation.md") || strings.Contains(fullText, "I executed") {
+		t.Fatalf("expected 0 leaked tool call fragments in text, got: %s", fullText)
+	}
+	if len(outCalls) != 2 {
+		t.Fatalf("expected 2 tool calls (read + webfetch), got %d: %+v", len(outCalls), outCalls)
+	}
+	if outCalls[0].Name != "read" || outCalls[1].Name != "webfetch" {
+		t.Fatalf("unexpected tool names: %+v", outCalls)
+	}
+}
