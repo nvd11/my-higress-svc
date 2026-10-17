@@ -179,6 +179,7 @@ func getDefaultConfig() *GlobalConfig {
 				UpstreamURL:   "https://generativelanguage.googleapis.com",
 				UpstreamModel: "gemini-4-argon",
 				APIKey:        "os.environ/OPENAI_API_KEY_FREE_3",
+				Fallback:      "gemini-3.8-flash",
 				Pricing: ModelPricing{
 					PromptPer1M:     2.000,
 					CompletionPer1M: 10.000,
@@ -194,6 +195,7 @@ func getDefaultConfig() *GlobalConfig {
 				UpstreamModel: "gemini-4-argon",
 				EnableSearch:  true,
 				APIKey:        "os.environ/OPENAI_API_KEY_FREE_3",
+				Fallback:      "gemini-3.8-flash-search",
 				Pricing: ModelPricing{
 					PromptPer1M:     2.000,
 					CompletionPer1M: 10.000,
