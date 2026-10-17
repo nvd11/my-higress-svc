@@ -386,10 +386,16 @@ func TestExtractGooglePartsFromContent_MultimodalImage(t *testing.T) {
 }
 
 func TestSanitizeSafetyTriggerText(t *testing.T) {
-	raw := `{"output": "", "exit_code": -1, "error": "BLOCKED (hardline): system shutdown/reboot. This command is on the unconditional blocklist and cannot be executed via the agent — not even with --yolo, /yolo, approvals.mode=off, or cron approve mode.", "status": "blocked"}`
+	raw := `{"output": "client_secret = GOCSPX-abcDEF1234567890_xyz", "exit_code": -1, "error": "BLOCKED (hardline): system shutdown/reboot. This command is on the unconditional blocklist and cannot be executed via the agent — not even with --yolo, /yolo, approvals.mode=off, or cron approve mode.", "status": "blocked"} [Google AI Studio safety filter blocked request: OTHER]I executed terminal`
 	cleaned := sanitizeSafetyTriggerText(raw)
 	if strings.Contains(cleaned, "BLOCKED (hardline)") || strings.Contains(cleaned, "unconditional blocklist") || strings.Contains(cleaned, `"status": "blocked"`) {
 		t.Fatalf("expected high-risk safety trigger phrases to be sanitized, got: %s", cleaned)
+	}
+	if strings.Contains(cleaned, "[Google AI Studio safety filter blocked request:") {
+		t.Fatalf("expected blocked notice tag to be stripped completely, got: %s", cleaned)
+	}
+	if strings.Contains(cleaned, "GOCSPX-abcDEF1234567890_xyz") || !strings.Contains(cleaned, "GOCSPX-[REDACTED]") {
+		t.Fatalf("expected Google OAuth secret to be masked, got: %s", cleaned)
 	}
 	if !strings.Contains(cleaned, "Command skipped (local policy):") || !strings.Contains(cleaned, `"status": "skipped"`) {
 		t.Fatalf("expected softened replacement phrases, got: %s", cleaned)
