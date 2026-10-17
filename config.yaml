@@ -15,6 +15,7 @@ model_list:
     upstream_url: "https://generativelanguage.googleapis.com"
     upstream_model: "gemini-4-argon"
     api_key: "os.environ/OPENAI_API_KEY_FREE_3"
+    fallback: "gemini-3.8-flash"
     pricing:
       prompt_per_1m: 2.000
       completion_per_1m: 10.000
@@ -31,6 +32,7 @@ model_list:
     upstream_model: "gemini-4-argon"
     enable_search: true
     api_key: "os.environ/OPENAI_API_KEY_FREE_3"
+    fallback: "gemini-3.8-flash-search"
     pricing:
       prompt_per_1m: 2.000
       completion_per_1m: 10.000

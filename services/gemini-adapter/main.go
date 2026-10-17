@@ -712,12 +712,23 @@ var safetyTriggerReplacements = []struct {
 	},
 }
 
+var (
+	blockedNoticeRegex = regexp.MustCompile(`\[Google AI Studio safety filter blocked request:[^\]]*\]`)
+	googleSecretRegex  = regexp.MustCompile(`GOCSPX-[A-Za-z0-9_\-]{10,}`)
+)
+
 // sanitizeSafetyTriggerText 温和脱敏工具输出或历史记录中极易误触 Google Gemini 越狱/红队审查 (blockReason: OTHER) 的高危拦截字眼
 func sanitizeSafetyTriggerText(s string) string {
 	if s == "" {
 		return s
 	}
 	out := s
+	if strings.Contains(out, "[Google AI Studio safety filter blocked request:") {
+		out = blockedNoticeRegex.ReplaceAllString(out, "")
+	}
+	if strings.Contains(out, "GOCSPX-") {
+		out = googleSecretRegex.ReplaceAllString(out, "GOCSPX-[REDACTED]")
+	}
 	for _, r := range safetyTriggerReplacements {
 		if strings.Contains(out, r.old) {
 			out = strings.ReplaceAll(out, r.old, r.new)
@@ -1219,10 +1230,13 @@ func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promp
 		compPrice := 3.750
 		cachePrice := 0.075
 
-		// 🎯 动态模型配置与费率解析
-		mCfg := FindModelConfig(modelReq)
-		if mCfg == nil && modelUsed != "" {
+		// 🎯 动态模型配置与费率解析 (优先按实际命中的 modelUsed 计费，兼顾 Fallback 降级)
+		var mCfg *ModelConfig
+		if modelUsed != "" {
 			mCfg = FindModelConfig(modelUsed)
+		}
+		if mCfg == nil {
+			mCfg = FindModelConfig(modelReq)
 		}
 
 		var costUSD float64
@@ -1961,6 +1975,36 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 	} else {
 		resp, err = client.Do(httpReq)
 	}
+
+	didFallback := false
+	// 🛡️ 声明式 HTTP 故障降级 (根据 config.yaml 的 fallback 字段)
+	if mCfg != nil && mCfg.Fallback != "" && (err != nil || resp == nil || resp.StatusCode == 429 || resp.StatusCode >= 500) {
+		fbModel := mCfg.Fallback
+		fbCfg := FindModelConfig(fbModel)
+		if fbCfg != nil && fbCfg.UpstreamModel != "" {
+			fbModel = fbCfg.UpstreamModel
+		}
+		fbKey := key
+		if fbCfg != nil && fbCfg.ResolveKey() != "" {
+			fbKey = fbCfg.ResolveKey()
+		}
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		log.Printf("⚠️ Model %s failed, falling back to %s (configured in config.yaml)...", realModel, fbModel)
+		fbURL := fmt.Sprintf("https://generativelanguage.googleapis.com/v1alpha/models/%s:%s?key=%s%s", fbModel, action, fbKey, extraQuery)
+		if fbReq, fbErr := http.NewRequestWithContext(c.Request.Context(), "POST", fbURL, bytes.NewReader(gReqBytes)); fbErr == nil {
+			fbReq.Header.Set("Content-Type", "application/json")
+			fbReq.Header.Set("User-Agent", "litellm/1.97.0")
+			if fbResp, doErr := client.Do(fbReq); doErr == nil {
+				resp = fbResp
+				err = nil
+				realModel = fbModel
+				didFallback = true
+			}
+		}
+	}
+
 	if err != nil {
 		if streamHeadersFlushed {
 			errChunk := gin.H{
@@ -2045,12 +2089,12 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 		var pendingPseudoBuf strings.Builder
 
 		lineCh := make(chan string, 64)
-		go func() {
-			defer close(lineCh)
-			for scanner.Scan() {
-				lineCh <- scanner.Text()
+		go func(sc *bufio.Scanner, ch chan string) {
+			defer close(ch)
+			for sc.Scan() {
+				ch <- sc.Text()
 			}
-		}()
+		}(scanner, lineCh)
 
 		hbTicker := time.NewTicker(15 * time.Second)
 		defer hbTicker.Stop()
@@ -2095,6 +2139,48 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 
 			// 检查安全拦截
 			if gResp.PromptFeedback != nil && gResp.PromptFeedback.BlockReason != "" {
+				// 立即清空可能缓冲了半截字符 (如 "I") 的 pendingPseudoBuf，防止退出循环后追加污染历史
+				pendingPseudoBuf.Reset()
+
+				// 🛡️ 声明式安全拦截无缝 Fallback: 若尚未向客户端吐出正文且在 config.yaml 中配置了 fallback，在当前流内无缝切换模型接力！
+				if !didFallback && fullResponseText == "" && !hasToolCalls && mCfg != nil && mCfg.Fallback != "" {
+					fbModel := mCfg.Fallback
+					fbCfg := FindModelConfig(fbModel)
+					if fbCfg != nil && fbCfg.UpstreamModel != "" {
+						fbModel = fbCfg.UpstreamModel
+					}
+					fbKey := key
+					if fbCfg != nil && fbCfg.ResolveKey() != "" {
+						fbKey = fbCfg.ResolveKey()
+					}
+					log.Printf("⚠️ Model %s blocked by Google safety filter (%s), seamlessly falling back in-stream to %s (configured in config.yaml)...", realModel, gResp.PromptFeedback.BlockReason, fbModel)
+					fbURL := fmt.Sprintf("https://generativelanguage.googleapis.com/v1alpha/models/%s:%s?key=%s%s", fbModel, action, fbKey, extraQuery)
+					if fbReq, fbErr := http.NewRequestWithContext(c.Request.Context(), "POST", fbURL, bytes.NewReader(gReqBytes)); fbErr == nil {
+						fbReq.Header.Set("Content-Type", "application/json")
+						fbReq.Header.Set("User-Agent", "litellm/1.97.0")
+						if fbResp, doErr := client.Do(fbReq); doErr == nil && fbResp != nil && fbResp.StatusCode == http.StatusOK {
+							_ = resp.Body.Close()
+							resp = fbResp
+							realModel = fbModel
+							didFallback = true
+							fbScanner := bufio.NewScanner(fbResp.Body)
+							fbBuf := make([]byte, 64*1024)
+							fbScanner.Buffer(fbBuf, 4*1024*1024)
+							newCh := make(chan string, 64)
+							go func(sc *bufio.Scanner, ch chan string) {
+								defer close(ch)
+								for sc.Scan() {
+									ch <- sc.Text()
+								}
+							}(fbScanner, newCh)
+							lineCh = newCh
+							continue streamLoop
+						} else if fbResp != nil {
+							_ = fbResp.Body.Close()
+						}
+					}
+				}
+
 				errMsg := fmt.Sprintf("[Google AI Studio safety filter blocked request: %s]", gResp.PromptFeedback.BlockReason)
 				chunk := gin.H{
 					"id":      chatCmplID,
@@ -2308,6 +2394,38 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 	if err := json.Unmarshal(respBody, &gResp); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed parsing Google response"})
 		return
+	}
+
+	// 🛡️ 非流式安全拦截声明式 Fallback (根据 config.yaml 的 fallback 字段)
+	if !didFallback && mCfg != nil && mCfg.Fallback != "" && ((gResp.PromptFeedback != nil && gResp.PromptFeedback.BlockReason != "") || len(gResp.Candidates) == 0) {
+		fbModel := mCfg.Fallback
+		fbCfg := FindModelConfig(fbModel)
+		if fbCfg != nil && fbCfg.UpstreamModel != "" {
+			fbModel = fbCfg.UpstreamModel
+		}
+		fbKey := key
+		if fbCfg != nil && fbCfg.ResolveKey() != "" {
+			fbKey = fbCfg.ResolveKey()
+		}
+		log.Printf("⚠️ Non-stream model %s blocked/empty, falling back to %s (configured in config.yaml)...", realModel, fbModel)
+		fbURL := fmt.Sprintf("https://generativelanguage.googleapis.com/v1alpha/models/%s:%s?key=%s", fbModel, action, fbKey)
+		if fbReq, fbErr := http.NewRequestWithContext(c.Request.Context(), "POST", fbURL, bytes.NewReader(gReqBytes)); fbErr == nil {
+			fbReq.Header.Set("Content-Type", "application/json")
+			fbReq.Header.Set("User-Agent", "litellm/1.97.0")
+			if fbResp, doErr := client.Do(fbReq); doErr == nil && fbResp != nil {
+				defer fbResp.Body.Close()
+				if fbResp.StatusCode == http.StatusOK {
+					if fbBody, rErr := io.ReadAll(fbResp.Body); rErr == nil {
+						var fbGResp GoogleGenerateContentResponse
+						if json.Unmarshal(fbBody, &fbGResp) == nil && len(fbGResp.Candidates) > 0 {
+							gResp = fbGResp
+							realModel = fbModel
+							didFallback = true
+						}
+					}
+				}
+			}
+		}
 	}
 
 	if len(gResp.Candidates) == 0 {
