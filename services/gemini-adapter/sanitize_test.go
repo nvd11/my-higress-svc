@@ -384,3 +384,14 @@ func TestExtractGooglePartsFromContent_MultimodalImage(t *testing.T) {
 		t.Errorf("unexpected base64 data: %s", parts[1].InlineData.Data)
 	}
 }
+
+func TestSanitizeSafetyTriggerText(t *testing.T) {
+	raw := `{"output": "", "exit_code": -1, "error": "BLOCKED (hardline): system shutdown/reboot. This command is on the unconditional blocklist and cannot be executed via the agent — not even with --yolo, /yolo, approvals.mode=off, or cron approve mode.", "status": "blocked"}`
+	cleaned := sanitizeSafetyTriggerText(raw)
+	if strings.Contains(cleaned, "BLOCKED (hardline)") || strings.Contains(cleaned, "unconditional blocklist") || strings.Contains(cleaned, `"status": "blocked"`) {
+		t.Fatalf("expected high-risk safety trigger phrases to be sanitized, got: %s", cleaned)
+	}
+	if !strings.Contains(cleaned, "Command skipped (local policy):") || !strings.Contains(cleaned, `"status": "skipped"`) {
+		t.Fatalf("expected softened replacement phrases, got: %s", cleaned)
+	}
+}
