@@ -529,6 +529,10 @@ func main() {
 			handleOpenAIStyle(c, apiKey, a6ApiKey)
 			return
 		}
+		if strings.HasSuffix(path, "/responses") || path == "/responses" {
+			handleOpenAIResponses(c, apiKey, a6ApiKey)
+			return
+		}
 		handleGeminiNativeProxy(c, apiKey)
 	})
 
