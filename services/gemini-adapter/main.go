@@ -1215,6 +1215,8 @@ func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promp
 			keyAlias = "celia-higress"
 		case strings.Contains(auth, "jayden"):
 			keyAlias = "jayden-higress"
+		case strings.Contains(auth, "justin"):
+			keyAlias = "justin-higress"
 		default:
 			if len(auth) > 8 {
 				keyAlias = auth[:8] + "-higress"
