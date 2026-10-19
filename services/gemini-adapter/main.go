@@ -1215,7 +1215,7 @@ func reportAuditLogAsync(reqID, rawAuthHeader, modelReq, modelUsed string, promp
 			keyAlias = "celia-higress"
 		case strings.Contains(auth, "jayden"):
 			keyAlias = "jayden-higress"
-		case strings.Contains(auth, "justin"):
+		case strings.Contains(auth, "justin-v2-k9m4x7q2"):
 			keyAlias = "justin-higress"
 		default:
 			if len(auth) > 8 {
@@ -1584,6 +1584,10 @@ func handleOpenAIStyle(c *gin.Context, defaultAPIKey, a6ApiKey string) {
 	}
 	if rawAuthHeader == "" {
 		rawAuthHeader = c.GetHeader("api-key")
+	}
+	if strings.Contains(rawAuthHeader, "20261019-888888") {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": gin.H{"message": "This API Key has been revoked due to exposure. Please use the new key.", "type": "invalid_request_error", "code": "invalid_api_key"}})
+		return
 	}
 
 	var req OpenAIChatRequest
