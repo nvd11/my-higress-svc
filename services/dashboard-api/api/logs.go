@@ -5,12 +5,27 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
 	"github.com/nvd11/my-higress-svc/services/dashboard-api/db"
 	"github.com/nvd11/my-higress-svc/services/dashboard-api/vlogs"
 )
+
+var cstZone = time.FixedZone("CST", 8*3600)
+
+// cstDateToUTCBounds 将东八区 (UTC+8) 的日期字符串 YYYY-MM-DD 转换为数据库中存储的 UTC 起止时间字符串
+func cstDateToUTCBounds(startDateStr, endDateStr string) (startUTC, endUTC string, ok bool) {
+	s, err1 := time.ParseInLocation("2006-01-02", startDateStr, cstZone)
+	e, err2 := time.ParseInLocation("2006-01-02", endDateStr, cstZone)
+	if err1 != nil || err2 != nil {
+		return "", "", false
+	}
+	startUTC = s.UTC().Format("2006-01-02 15:04:05")
+	endUTC = e.Add(24 * time.Hour).UTC().Format("2006-01-02 15:04:05")
+	return startUTC, endUTC, true
+}
 
 func RegisterLogsRoutes(rg *gin.RouterGroup, vlogsClient *vlogs.Client) {
 	// 动态获取筛选下拉框选项 (模型列表与 Key 别名列表)
@@ -98,24 +113,27 @@ func RegisterLogsRoutes(rg *gin.RouterGroup, vlogsClient *vlogs.Client) {
 		whereClauses := []string{"1=1"}
 		args := []interface{}{}
 
-		// 日期过滤条件
+		// 日期过滤条件 (统一按东八区 UTC+8 自然日折算为 UTC 时间区间，并直接命中 idx_logs_created_at 索引)
 		if startDateStr != "" && endDateStr != "" {
-			if startDateStr == endDateStr {
-				whereClauses = append(whereClauses, "DATE(created_at) = ?")
-				args = append(args, startDateStr)
-			} else {
-				whereClauses = append(whereClauses, "DATE(created_at) >= ? AND DATE(created_at) <= ?")
-				args = append(args, startDateStr, endDateStr)
+			if sUTC, eUTC, ok := cstDateToUTCBounds(startDateStr, endDateStr); ok {
+				whereClauses = append(whereClauses, "created_at >= ? AND created_at < ?")
+				args = append(args, sUTC, eUTC)
 			}
 		} else if dateStr != "" {
-			whereClauses = append(whereClauses, "DATE(created_at) = ?")
-			args = append(args, dateStr)
+			if sUTC, eUTC, ok := cstDateToUTCBounds(dateStr, dateStr); ok {
+				whereClauses = append(whereClauses, "created_at >= ? AND created_at < ?")
+				args = append(args, sUTC, eUTC)
+			}
 		} else if startDateStr != "" {
-			whereClauses = append(whereClauses, "DATE(created_at) >= ?")
-			args = append(args, startDateStr)
+			if s, err := time.ParseInLocation("2006-01-02", startDateStr, cstZone); err == nil {
+				whereClauses = append(whereClauses, "created_at >= ?")
+				args = append(args, s.UTC().Format("2006-01-02 15:04:05"))
+			}
 		} else if endDateStr != "" {
-			whereClauses = append(whereClauses, "DATE(created_at) <= ?")
-			args = append(args, endDateStr)
+			if e, err := time.ParseInLocation("2006-01-02", endDateStr, cstZone); err == nil {
+				whereClauses = append(whereClauses, "created_at < ?")
+				args = append(args, e.Add(24*time.Hour).UTC().Format("2006-01-02 15:04:05"))
+			}
 		}
 
 		// 1. 若携带搜索关键词，先向 VictoriaLogs 检索匹配的 request_id 列表
