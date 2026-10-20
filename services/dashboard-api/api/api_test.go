@@ -249,3 +249,24 @@ func TestMetricsEndpointWithMockDB(t *testing.T) {
 		t.Errorf("expected models_breakdown populated: %v", resp.ModelsBreakdown)
 	}
 }
+
+// 7. 验证东八区 (UTC+8) 自然日向 UTC 查询区间的精确换算逻辑
+func TestCSTDateToUTCBounds(t *testing.T) {
+	sUTC, eUTC, ok := cstDateToUTCBounds("2026-10-20", "2026-10-20")
+	if !ok {
+		t.Fatalf("expected ok=true for valid date")
+	}
+	// 东八区 2026-10-20 00:00:00 对应 UTC 2026-10-19 16:00:00
+	if sUTC != "2026-10-19 16:00:00" {
+		t.Errorf("expected startUTC '2026-10-19 16:00:00', got '%s'", sUTC)
+	}
+	// 东八区 2026-10-21 00:00:00 对应 UTC 2026-10-20 16:00:00
+	if eUTC != "2026-10-20 16:00:00" {
+		t.Errorf("expected endUTC '2026-10-20 16:00:00', got '%s'", eUTC)
+	}
+
+	_, _, okBad := cstDateToUTCBounds("invalid-date", "2026-10-20")
+	if okBad {
+		t.Errorf("expected ok=false for invalid date")
+	}
+}
