@@ -41,15 +41,22 @@ func RegisterMetricsRoutes(rg *gin.RouterGroup) {
 	rg.GET("/metrics/summary", func(c *gin.Context) {
 		dateStr := c.Query("date")
 		if dateStr == "" {
-			dateStr = time.Now().Format("2006-01-02")
+			dateStr = time.Now().In(cstZone).Format("2006-01-02")
 		}
 
 		apiKeyAlias := c.Query("api_key_alias")
 		modelUsed := c.Query("model_used")
 		statusCodeStr := c.Query("status_code")
 
-		whereClauses := []string{"DATE(created_at) = ?"}
-		args := []interface{}{dateStr}
+		whereClauses := []string{"1=1"}
+		args := []interface{}{}
+		if sUTC, eUTC, ok := cstDateToUTCBounds(dateStr, dateStr); ok {
+			whereClauses = append(whereClauses, "created_at >= ? AND created_at < ?")
+			args = append(args, sUTC, eUTC)
+		} else {
+			whereClauses = append(whereClauses, "DATE(created_at) = ?")
+			args = append(args, dateStr)
+		}
 
 		if apiKeyAlias != "" {
 			whereClauses = append(whereClauses, "api_key_alias = ?")
