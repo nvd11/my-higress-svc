@@ -280,3 +280,19 @@ func TestProcessStreamPseudoBuffer_MultipleParallelToolCallsAcrossChunks(t *test
 		t.Fatalf("unexpected tool names: %+v", outCalls)
 	}
 }
+
+// TestProcessStreamPseudoBuffer_AbortedStutterRecovery 验证模型输出半截未闭合路径后重复重启 I executed 时的自愈提取能力
+func TestProcessStreamPseudoBuffer_AbortedStutterRecovery(t *testing.T) {
+	raw := `I executed ` + "`read`" + ` with input: {"filePath":"/home/gateman/projects/github/sms-flink-etl/src/main/java/com/finance/etl/jobs/SmsOdsToDwdJobI executed ` + "`read`" + ` with input: {"filePath":"/home/gateman/projects/github/sms-flink-etl/src/main/java/com/finance/etl/jobs/SmsOdsToDwdJobI executed ` + "`read`" + ` with input: {"filePath":"/home/gateman/projects/github/sms-flink-etl/src/main/java/com/finance/etl/jobs/SmsOdsToDwdJobI executed ` + "`read`" + ` with input: {"filePath":"/home/gateman/projects/github/sms-flink-etl/src/main/java/com/finance/etl/jobs/SmsOdsToDwdJob.java","limit":40,"offset":30}`
+
+	texts, calls, rem := processStreamPseudoBuffer(raw, true, true)
+	if len(texts) != 0 || rem != "" {
+		t.Fatalf("expected 0 leaked texts and empty rem, got texts=%v, rem=%s", texts, rem)
+	}
+	if len(calls) != 1 || calls[0].Name != "read" {
+		t.Fatalf("expected 1 recovered read tool call, got: %+v", calls)
+	}
+	if !strings.Contains(calls[0].Args, "SmsOdsToDwdJob.java") {
+		t.Fatalf("expected SmsOdsToDwdJob.java in recovered args, got: %s", calls[0].Args)
+	}
+}
