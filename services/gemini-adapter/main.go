@@ -351,6 +351,18 @@ func processStreamPseudoBuffer(bufStr string, allowTools bool, forceFlush bool) 
 				continue
 			}
 
+			// 🎯 防复读截断保护: 若模型在输出半截未闭合 JSON 时重头复读了 "I executed `xxx` with input: {"
+			// (未转义的 `{"` 绝不可能合法出现在未闭合的 JSON 字符串内部)，直接丢弃前段残缺碎片并推进至新起点！
+			if nextLoc := pseudoCallPrefixRegex.FindStringSubmatchIndex(afterPrefix); len(nextLoc) >= 4 {
+				nextAfter := strings.TrimLeft(afterPrefix[nextLoc[1]:], " \t\r\n")
+				if strings.HasPrefix(nextAfter, `{"`) || nextAfter == "{" || nextAfter == "" {
+					if _, _, okBefore := extractBalancedJSONWithEnd(afterPrefix[:nextLoc[0]]); !okBefore {
+						bufStr = afterPrefix[nextLoc[0]:]
+						continue
+					}
+				}
+			}
+
 			jsonStr, endIdx, okJSON := extractBalancedJSONWithEnd(afterPrefix)
 			if !okJSON {
 				if forceFlush || len(bufStr) > 65536 {
