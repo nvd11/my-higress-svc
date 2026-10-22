@@ -37,6 +37,17 @@ model_list:
       prompt_per_1m: 0.15
       completion_per_1m: 0.60
       cache_read_per_1m: 0.03
+
+  - model_name: "deepseek-v4-pro-0813"
+    provider: "a6api"
+    protocol: "openai"
+    upstream_url: "https://api.a6api.com/v1/chat/completions"
+    upstream_model: "deepseek-v4-pro-0813"
+    api_key: "os.environ/A6_KEY"
+    pricing:
+      prompt_per_1m: 0.00096
+      completion_per_1m: 0.00096
+      cache_read_per_1m: 0.00096
 `
 	if err := os.WriteFile(cfgFile, []byte(yamlContent), 0644); err != nil {
 		t.Fatalf("failed writing test config: %v", err)
@@ -46,8 +57,8 @@ model_list:
 	if err != nil {
 		t.Fatalf("failed loading config: %v", err)
 	}
-	if len(cfg.ModelList) != 2 {
-		t.Fatalf("expected 2 models, got %d", len(cfg.ModelList))
+	if len(cfg.ModelList) != 3 {
+		t.Fatalf("expected 3 models, got %d", len(cfg.ModelList))
 	}
 
 	// 1. 测试精准匹配
@@ -69,6 +80,17 @@ model_list:
 	mFuzzy := FindModelConfig("my-kimi-fast")
 	if mFuzzy == nil || mFuzzy.ModelName != "kimi-k3" {
 		t.Fatalf("failed finding model by fuzzy matching kimi")
+	}
+
+	deepseek := FindModelConfig("deepseek-v4-pro-0813")
+	if deepseek == nil || deepseek.Provider != "a6api" || deepseek.Protocol != "openai" {
+		t.Fatalf("failed finding DeepSeek A6 model")
+	}
+	if deepseek.UpstreamModel != "deepseek-v4-pro-0813" {
+		t.Fatalf("expected DeepSeek upstream model deepseek-v4-pro-0813, got %s", deepseek.UpstreamModel)
+	}
+	if deepseek.Pricing.PromptPer1M != 0.00096 || deepseek.Pricing.CompletionPer1M != 0.00096 {
+		t.Fatalf("unexpected DeepSeek pricing: %+v", deepseek.Pricing)
 	}
 
 	// 4. 测试 Key 环境变量解析
