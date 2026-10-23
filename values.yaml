@@ -19,7 +19,7 @@ global:
 controller:
   replicas: 1
   nodeSelector:
-    kubernetes.io/hostname: free-arm-vm
+    kubernetes.io/arch: amd64
   resources:
     requests:
       cpu: "100m"
