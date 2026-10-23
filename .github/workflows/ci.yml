@@ -55,7 +55,7 @@ jobs:
       - name: Stub Unsupported WASI Imports for Envoy Runtime
         run: |
           cd plugins/finops-audit
-          wasi-stub plugin.wasm --stub-function wasi_snapshot_preview1:sched_yield --stub-function wasi_snapshot_preview1:poll_oneoff -o plugin-stubbed.wasm
+          wasi-stub plugin.wasm --stub-function wasi_snapshot_preview1:sched_yield -o plugin-stubbed.wasm
           mv plugin-stubbed.wasm plugin.wasm
           echo "Wasm binary stubbed successfully: $(ls -lh plugin.wasm | awk '{print $5}')"
           
@@ -64,7 +64,12 @@ jobs:
           sudo apt-get update && sudo apt-get install -y wabt
           cd plugins/finops-audit
           echo "Checking remaining imports in stubbed plugin.wasm:"
-          wasm-objdump -j Import -x plugin.wasm | grep -E "sched_yield|poll_oneoff" || echo "SUCCESS: No sched_yield or poll_oneoff found!"
+          wasm-objdump -j Import -x plugin.wasm
+          if wasm-objdump -j Import -x plugin.wasm | grep -q "sched_yield"; then
+            echo "ERROR: sched_yield is still present in plugin.wasm!"
+            exit 1
+          fi
+          echo "SUCCESS: sched_yield was stubbed cleanly!"
 
       - name: Upload Wasm Artifact
         uses: actions/upload-artifact@v4
