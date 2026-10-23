@@ -8,6 +8,7 @@ import (
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
+	"github.com/nvd11/my-higress-svc/plugins/finops-audit/pkg/finops"
 	"github.com/tidwall/gjson"
 )
 
@@ -24,7 +25,7 @@ const (
 )
 
 func main() {
-	wrapper.SetCtx(
+	wrapper.SetCtx[PluginConfig](
 		pluginName,
 		wrapper.ParseConfig(parseConfig),
 		wrapper.ProcessRequestHeaders(onHttpRequestHeaders),
@@ -34,7 +35,7 @@ func main() {
 	)
 }
 
-func parseConfig(json gjson.Result, config *PluginConfig, log wrapper.Log) error {
+func parseConfig(json gjson.Result, config *PluginConfig) error {
 	config.VictoriaLogsURL = json.Get("victoria_logs_url").String()
 	config.DashboardAPIURL = json.Get("dashboard_api_url").String()
 	config.DefaultFxRate = json.Get("default_fx_rate").Float()
@@ -52,7 +53,7 @@ func parseConfig(json gjson.Result, config *PluginConfig, log wrapper.Log) error
 	return nil
 }
 
-func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig, log wrapper.Log) types.Action {
+func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig) types.Action {
 	ctx.SetContext(ctxStartTime, time.Now())
 
 	reqID, _ := proxywasm.GetHttpRequestHeader("x-request-id")
@@ -72,7 +73,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig, log wrap
 			consumer = alias
 		} else {
 			// 如果配置了白名单密钥但未匹配上，拒绝未授权请求
-			_ = proxywasm.SendHttpResponse(401, [][2]string{{"Content-Type", "application/json"}}, []byte(`{"error":{"message":"Invalid Virtual Key","type":"invalid_request_error","code":"invalid_api_key"}}`))
+			_ = proxywasm.SendHttpResponse(401, [][2]string{{"Content-Type", "application/json"}}, []byte(`{"error":{"message":"Invalid Virtual Key","type":"invalid_request_error","code":"invalid_api_key"}}`), -1)
 			return types.ActionPause
 		}
 	}
@@ -92,7 +93,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig, log wrap
 	return types.ActionContinue
 }
 
-func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte, log wrapper.Log) types.Action {
+func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte) types.Action {
 	if len(body) > 0 {
 		ctx.SetContext(ctxPromptBody, string(body))
 		// 解析请求中的 model
@@ -104,7 +105,7 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 	return types.ActionContinue
 }
 
-func onHttpResponseHeaders(ctx wrapper.HttpContext, config PluginConfig, log wrapper.Log) types.Action {
+func onHttpResponseHeaders(ctx wrapper.HttpContext, config PluginConfig) types.Action {
 	provider, _ := proxywasm.GetHttpResponseHeader("x-envoy-upstream-service-time")
 	if provider != "" {
 		ctx.SetContext(ctxProvider, "google-gemini")
