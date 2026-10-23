@@ -55,7 +55,7 @@ jobs:
       - name: Stub Unsupported WASI Imports for Envoy Runtime
         run: |
           cd plugins/finops-audit
-          wasi-stub plugin.wasm -o plugin-stubbed.wasm
+          wasi-stub plugin.wasm --stub-function wasi_snapshot_preview1:sched_yield --stub-function wasi_snapshot_preview1:poll_oneoff -o plugin-stubbed.wasm
           mv plugin-stubbed.wasm plugin.wasm
           echo "Wasm binary stubbed successfully: $(ls -lh plugin.wasm | awk '{print $5}')"
           
