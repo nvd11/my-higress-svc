@@ -1,0 +1,37 @@
+# ==============================================================================
+# 自研 FinOps 财务审计与 Token 计量 Envoy 原生 Wasm 插件挂载清单
+# ==============================================================================
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: finops-audit
+  namespace: higress-system
+  labels:
+    app.kubernetes.io/name: higress-ai-gateway
+    app.kubernetes.io/part-of: my-higress-svc
+spec:
+  priority: 90
+  failStrategy: FAIL_OPEN
+  imagePullPolicy: Always
+  matchRules:
+    - ingress:
+        - higress-system/higress-ai-ingress
+  url: oci://ghcr.io/nvd11/higress-finops-audit:latest
+  defaultConfig:
+    dashboard_api_url: "http://higress-dashboard-backend.higress-system.svc.cluster.local:4000/api/v1/internal/audit-log"
+    default_fx_rate: 7.2300
+    virtual_keys:
+      "sk-cindy-higress-20261003-888888": "cindy"
+      "sk-yui-higress-20261003-777777": "yui"
+      "sk-hebe-higress-20261003-999999": "hebe"
+      "sk-aurora-higress-20261011-888888": "aurora"
+      "sk-celia-higress-20261011-888888": "celia"
+      "sk-claire-higress-20261011-888888": "claire"
+      "sk-leona-higress-20261011-888888": "leona"
+      "sk-moon-higress-20261011-888888": "moon"
+      "sk-alice-higress-20261011-888888": "alice"
+      "sk-stella-higress-20261011-888888": "stella"
+      "sk-rin-higress-20261011-888888": "rin"
+      "sk-jayden-production-key": "jayden"
+      "sk-yui-40b9abf5a3612e48aa25111afbc4f813": "yui-agent"
+      "sk-rin-8f1d3c92e104b47a952a123456789abc": "rin-agent"
