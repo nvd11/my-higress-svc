@@ -6,7 +6,6 @@ on:
       - main
     paths:
       - "config.yaml"
-      - "services/gemini-adapter/config.yaml"
       - ".github/workflows/sync-config.yml"
   workflow_dispatch:
 

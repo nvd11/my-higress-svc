@@ -88,8 +88,7 @@ graph TB
 ├── wasm-plugin-ci-cd.yml      # Wasm 插件编译、GHCR 发布与 GitOps 自动回写
 ├── backend-ci-cd.yml          # Dashboard 后端 Go 单测、镜像构建与 Dispatch 派发
 ├── frontend-ci-cd.yml         # Dashboard 前端打包、多架构镜像发布与 Dispatch 派发
-├── sync-config.yml            # 模型网关动态路由配置 Base64 自动注入
-└── adapter-ci-cd.yml          # (历史归档) 旧版 gemini-adapter 流水线，已退役
+└── sync-config.yml            # 模型网关动态路由配置 Base64 自动注入
 ```
 
 ---
@@ -158,11 +157,10 @@ flowchart TD
 
 ---
 
-### 3.5 `adapter-ci-cd.yml` (历史适配器 - 已退役)
+### 3.5 历史适配器清理说明 (Gemini Adapter Cleaned)
 
-* **文件路径**：[`.github/workflows/adapter-ci-cd.yml`](file:///home/gateman/projects/github/my-higress-svc/.github/workflows/adapter-ci-cd.yml)
-* **状态说明**：⚠️ **已全量废弃 / 归档保存**。
-* **架构背景**：过去用于编译中间代理层 `gemini-adapter`，目前流量已完全由 Envoy 直连海外上游，该中转层已被 Envoy 原生 Wasm 彻底替代。
+* **状态说明**：✅ **源码与流水线已彻底删除**。
+* **架构背景**：过去用于编译中间代理层 `gemini-adapter`，目前流量已完全由 Envoy 直连海外上游，该中转层已被 Envoy 原生 Wasm 彻底替代，相关的源码与 `adapter-ci-cd.yml` 已完成物理清理。
 
 ---
 
