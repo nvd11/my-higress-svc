@@ -97,6 +97,37 @@ model_list:
       completion_per_1m: 0.032057
       cache_read_per_1m: 0.0102
 
+  # 👁️ A6 API 渠道: hy3 (多模态视觉模型 · opencode vision-translator 专用)
+  # 实测 2026-10-24: 320x120 图 5.2~5.9s；800x600 图 11.8~12.7s；reasoning 0；OCR 准确
+  # ⚠️ a6api 未公开单价，pricing 暂记 0，待账单核实后回填
+  - model_name: "hy3"
+    aliases:
+      - "hunyuan3"
+    provider: "a6api"
+    protocol: "openai"
+    upstream_url: "https://api.a6api.com/v1/chat/completions"
+    upstream_model: "hy3"
+    api_key: "os.environ/A6_API_KEY"
+    fallback: "glm-5.3"
+    pricing:
+      prompt_per_1m: 0.0
+      completion_per_1m: 0.0
+      cache_read_per_1m: 0.0
+
+  # 👁️ A6 API 渠道: hy4-preview (多模态视觉模型 · 备用候选)
+  # 实测 2026-10-24: 800x600 图 6.3~18.6s，抖动较大，稳定性不及 hy3
+  - model_name: "hy4-preview"
+    provider: "a6api"
+    protocol: "openai"
+    upstream_url: "https://api.a6api.com/v1/chat/completions"
+    upstream_model: "hy4-preview"
+    api_key: "os.environ/A6_API_KEY"
+    fallback: "hy3"
+    pricing:
+      prompt_per_1m: 0.0
+      completion_per_1m: 0.0
+      cache_read_per_1m: 0.0
+
   # 🛡️ A6 API 渠道: gpt-5.6-luna (对齐原 LiteLLM A6 实测价: $0.0096/1M)
   - model_name: "gpt-5.6-luna"
     aliases:
