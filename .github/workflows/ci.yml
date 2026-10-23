@@ -39,7 +39,7 @@ jobs:
 
       - name: Compile Wasm Binary via TinyGo Container
         run: |
-          docker run --rm -v ${{ github.workspace }}/plugins/finops-audit:/src -w /src tinygo/tinygo:latest tinygo build -o plugin.wasm -target=wasi -gc=custom -tags="custom_malloc" .
+          docker run --rm -v ${{ github.workspace }}/plugins/finops-audit:/src -w /src tinygo/tinygo:latest tinygo build -o plugin.wasm -target=wasi .
           echo "Wasm binary compiled successfully: $(ls -lh plugins/finops-audit/plugin.wasm | awk '{print $5}')"
 
       - name: Upload Wasm Artifact
