@@ -24,7 +24,9 @@ const (
 	ctxProvider       = "provider"
 )
 
-func main() {
+func main() {}
+
+func init() {
 	wrapper.SetCtx[PluginConfig](
 		pluginName,
 		wrapper.ParseConfig(parseConfig),
