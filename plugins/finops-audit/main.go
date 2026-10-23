@@ -30,7 +30,7 @@ func main() {
 		wrapper.ProcessRequestHeaders(onHttpRequestHeaders),
 		wrapper.ProcessRequestBody(onHttpRequestBody),
 		wrapper.ProcessResponseHeaders(onHttpResponseHeaders),
-		wrapper.ProcessResponseBody(onHttpResponseBody),
+		wrapper.ProcessStreamingResponseBody(onHttpStreamingResponseBody),
 	)
 }
 
@@ -70,8 +70,6 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig, log wrap
 	if token != "" && len(config.VirtualKeys) > 0 {
 		if alias, ok := config.VirtualKeys[token]; ok {
 			consumer = alias
-			// 🎯 核心安全加固: 剥离下游客户端传入的 Virtual Key，防止污染上游 Google 官方直连鉴权
-			_ = proxywasm.RemoveHttpRequestHeader("authorization")
 		} else {
 			// 如果配置了白名单密钥但未匹配上，拒绝未授权请求
 			_ = proxywasm.SendHttpResponse(401, [][2]string{{"Content-Type", "application/json"}}, []byte(`{"error":{"message":"Invalid Virtual Key","type":"invalid_request_error","code":"invalid_api_key"}}`))
@@ -116,26 +114,15 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config PluginConfig, log wra
 	return types.ActionContinue
 }
 
-func onHttpResponseBody(ctx wrapper.HttpContext, config PluginConfig, body []byte, log wrapper.Log) types.Action {
-	// 🎯 核心流式修补: 拦截并修复被官方 ai-proxy 阉割掉 tool_calls 的空壳 Chunk
-	if len(body) > 0 {
-		rawBodyStr := string(body)
-		if strings.HasPrefix(rawBodyStr, "data: {") {
-			chunkJSON := strings.TrimPrefix(rawBodyStr, "data: ")
-			chunkJSON = strings.TrimSpace(chunkJSON)
-			if repaired, modified := finops.RepairMalformedChunk(chunkJSON, rawBodyStr); modified {
-				_ = proxywasm.ReplaceHttpResponseBody([]byte("data: " + repaired + "\n\n"))
-			}
-		}
-
-		prevResp, _ := ctx.GetContext(ctxResponseBody).(string)
-		ctx.SetContext(ctxResponseBody, prevResp+rawBodyStr)
+func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config PluginConfig, chunk []byte, isLastChunk bool) []byte {
+	if len(chunk) > 0 {
+		rawChunk := string(chunk)
+		prev, _ := ctx.GetContext(ctxResponseBody).(string)
+		ctx.SetContext(ctxResponseBody, prev+rawChunk)
 	}
 
-	// 🎯 核心生命周期守则: 必须在 endOfStream (流传输彻底完毕) 时触发异步旁路处理
-	// proxy-wasm-go-sdk 在收到 EOS 时 body 阶段处理完毕
-	go func() {
-		// 安全提取上下文
+	if isLastChunk {
+		fullResponse, _ := ctx.GetContext(ctxResponseBody).(string)
 		startVal := ctx.GetContext(ctxStartTime)
 		var startTime time.Time
 		if t, ok := startVal.(time.Time); ok {
@@ -149,20 +136,22 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config PluginConfig, body []byt
 		apiKeyAlias, _ := ctx.GetContext(ctxAPIKeyAlias).(string)
 		modelRequested, _ := ctx.GetContext(ctxModelRequested).(string)
 		if modelRequested == "" {
-			modelRequested = "gemini-3.8-flash"
+			modelRequested = "deepseek-v4-pro-0813"
 		}
 		prompt, _ := ctx.GetContext(ctxPromptBody).(string)
-		fullResponse, _ := ctx.GetContext(ctxResponseBody).(string)
 
-		// 解析 Usage: 针对普通 JSON 或流式 SSE 最终块提取 tokens
-		var promptTokens, completionTokens, reasoningTokens, totalTokens int
+		var promptTokens, completionTokens, reasoningTokens, cacheReadTokens, totalTokens int
 		statusCode := 200
 
 		if strings.Contains(fullResponse, "usage") {
-			// 如果是 SSE 格式，截取最后包含 data: 的有效 JSON
 			rawJSON := fullResponse
-			if idx := strings.LastIndex(fullResponse, "data: "); idx != -1 {
-				rawJSON = strings.TrimSpace(fullResponse[idx+6:])
+			lines := strings.Split(fullResponse, "\n")
+			for i := len(lines) - 1; i >= 0; i-- {
+				line := strings.TrimSpace(lines[i])
+				if strings.HasPrefix(line, "data: ") && strings.Contains(line, "usage") {
+					rawJSON = strings.TrimPrefix(line, "data: ")
+					break
+				}
 			}
 			parsed := gjson.Parse(rawJSON)
 			promptTokens = int(parsed.Get("usage.prompt_tokens").Int())
@@ -171,61 +160,56 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config PluginConfig, body []byt
 			if reasoningTokens == 0 {
 				reasoningTokens = int(parsed.Get("usage.reasoning_tokens").Int())
 			}
+			cacheReadTokens = int(parsed.Get("usage.prompt_tokens_details.cached_tokens").Int())
 			totalTokens = int(parsed.Get("usage.total_tokens").Int())
 			if totalTokens == 0 {
 				totalTokens = promptTokens + completionTokens + reasoningTokens
 			}
 		}
 
-		// 计算美金开销与人民币折算
-		costUSD, costCNY := CalculateCost(modelRequested, promptTokens, completionTokens, reasoningTokens, config.DefaultFxRate)
+		costUSD, costCNY := finops.CalculateCost(modelRequested, promptTokens, completionTokens, reasoningTokens, config.DefaultFxRate)
+		pricing := finops.GetModelPricing(modelRequested)
 
-		// 构造 MySQL 与后端中转实体 (100% 对齐 COMPATIBILITY.md)
+		provider := "a6api"
+		providerKeyAlias := "A6_API_KEY"
+		if strings.HasPrefix(modelRequested, "gemini") {
+			provider = "google-gemini"
+			providerKeyAlias = "OPENAI_API_KEY_FREE_3"
+		}
+
 		auditRecord := AuditLogRecord{
-			ID:               uuid.NewString(),
-			RequestID:        reqID,
-			APIKeyAlias:      apiKeyAlias,
-			ModelRequested:   modelRequested,
-			ModelUsed:        modelRequested,
-			Provider:         "google-gemini",
-			ProviderKeyAlias: "OPENAI_API_KEY_FREE_3",
-			PromptTokens:     promptTokens,
-			CompletionTokens: completionTokens,
-			ReasoningTokens:  reasoningTokens,
-			TotalTokens:      totalTokens,
-			CostUSD:          costUSD,
-			CostCNY:          costCNY,
-			FxRate:           config.DefaultFxRate,
-			LatencyMS:        latency,
-			StatusCode:       statusCode,
-			CreatedAt:        time.Now(),
-			Prompt:           prompt,
-			Response:         fullResponse,
+			ID:                     uuid.NewString(),
+			RequestID:              reqID,
+			APIKeyAlias:            apiKeyAlias,
+			ModelRequested:         modelRequested,
+			ModelUsed:              modelRequested,
+			Provider:               provider,
+			ProviderKeyAlias:       providerKeyAlias,
+			PromptTokens:           promptTokens,
+			CompletionTokens:       completionTokens,
+			ReasoningTokens:        reasoningTokens,
+			CacheReadTokens:        cacheReadTokens,
+			TotalTokens:            totalTokens,
+			PromptUnitPriceUSD:     pricing.PromptPer1M,
+			CacheUnitPriceUSD:      pricing.PromptPer1M,
+			CompletionUnitPriceUSD: pricing.CompletionPer1M,
+			CostUSD:                costUSD,
+			CostCNY:                costCNY,
+			FxRate:                 config.DefaultFxRate,
+			LatencyMS:              latency,
+			StatusCode:             statusCode,
+			CreatedAt:              time.Now(),
+			Prompt:                 prompt,
+			Response:               fullResponse,
 		}
 
-		// 构造 VictoriaLogs 冷归档实体
-		vlogsRecord := VictoriaLogsPayload{
-			RequestID:        reqID,
-			Model:            modelRequested,
-			KeyAlias:         apiKeyAlias,
-			Prompt:           prompt,
-			Response:         fullResponse,
-			PromptTokens:     promptTokens,
-			CompletionTokens: completionTokens,
-			ReasoningTokens:  reasoningTokens,
-			TotalTokens:      totalTokens,
-			Spend:            costUSD,
-			StatusCode:       statusCode,
-			LatencyMS:        latency,
-		}
-
-		// 异步兵分两路派发
-		client := wrapper.NewClusterClient(wrapper.DnsCluster{
-			// Higress wasm-go SDK 客户端驱动
+		dashClient := wrapper.NewClusterClient(wrapper.DnsCluster{
+			ServiceName: "dashboard-backend",
+			Domain:      "higress-dashboard-backend.higress-system.svc.cluster.local",
+			Port:        4000,
 		})
-		_ = SendToVictoriaLogs(client, config.VictoriaLogsURL, vlogsRecord)
-		_ = SendToMySQLSink(client, config.DashboardAPIURL, auditRecord)
-	}()
+		_ = SendToMySQLSink(dashClient, config.DashboardAPIURL, auditRecord)
+	}
 
-	return types.ActionContinue
+	return chunk
 }

@@ -20,24 +20,28 @@ type PluginConfig struct {
 
 // AuditLogRecord 对应 MySQL llm_request_logs 表结构的完整实体 (100% 兼容旧系统)
 type AuditLogRecord struct {
-	ID               string    `json:"id"`
-	RequestID        string    `json:"request_id"`
-	APIKeyAlias      string    `json:"api_key_alias"`
-	ModelRequested   string    `json:"model_requested"`
-	ModelUsed        string    `json:"model_used"`
-	Provider         string    `json:"provider"`
-	ProviderKeyAlias string    `json:"provider_key_alias"`
-	PromptTokens     int       `json:"prompt_tokens"`
-	CompletionTokens int       `json:"completion_tokens"`
-	ReasoningTokens  int       `json:"reasoning_tokens"`
-	TotalTokens      int       `json:"total_tokens"`
-	CostUSD          float64   `json:"cost_usd"`
-	CostCNY          float64   `json:"cost_cny"`
-	FxRate           float64   `json:"fx_rate"`
-	LatencyMS        int       `json:"latency_ms"`
-	StatusCode       int       `json:"status_code"`
-	ErrorMsg         string    `json:"error_msg"`
-	CreatedAt        time.Time `json:"created_at"`
+	ID                     string    `json:"id"`
+	RequestID              string    `json:"request_id"`
+	APIKeyAlias            string    `json:"api_key_alias"`
+	ModelRequested         string    `json:"model_requested"`
+	ModelUsed              string    `json:"model_used"`
+	Provider               string    `json:"provider"`
+	ProviderKeyAlias       string    `json:"provider_key_alias"`
+	PromptTokens           int       `json:"prompt_tokens"`
+	CompletionTokens       int       `json:"completion_tokens"`
+	ReasoningTokens        int       `json:"reasoning_tokens"`
+	CacheReadTokens        int       `json:"cache_read_tokens"`
+	TotalTokens            int       `json:"total_tokens"`
+	PromptUnitPriceUSD     float64   `json:"prompt_unit_price_usd"`
+	CacheUnitPriceUSD      float64   `json:"cache_unit_price_usd"`
+	CompletionUnitPriceUSD float64   `json:"completion_unit_price_usd"`
+	CostUSD                float64   `json:"cost_usd"`
+	CostCNY                float64   `json:"cost_cny"`
+	FxRate                 float64   `json:"fx_rate"`
+	LatencyMS              int       `json:"latency_ms"`
+	StatusCode             int       `json:"status_code"`
+	ErrorMsg               *string   `json:"error_msg"`
+	CreatedAt              time.Time `json:"created_at"`
 	// 携带原始报文供给 Dashboard-API 写入 Redis 与 VictoriaLogs
 	Prompt   string `json:"prompt,omitempty"`
 	Response string `json:"response,omitempty"`

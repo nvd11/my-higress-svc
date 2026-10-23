@@ -22,7 +22,9 @@ var DefaultPricingMatrix = map[string]ModelPricing{
 	"gemini-3.8-flash": {PromptPer1M: 0.75, CompletionPer1M: 3.75, ReasoningPer1M: 3.75},
 	// 🛡️ A6 API 中转渠道 (5折保底)
 	"gemini-3.8-backup": {PromptPer1M: 0.375, CompletionPer1M: 1.875, ReasoningPer1M: 1.875},
+	"gemini-4-argon":    {PromptPer1M: 2.0, CompletionPer1M: 10.0, ReasoningPer1M: 10.0},
 	// 🌙 推理与编程模型组 (已折算为美金或特惠价)
+	"deepseek-v4-pro-0813": {PromptPer1M: 0.00096, CompletionPer1M: 0.00096, ReasoningPer1M: 0.00096},
 	"kimi-k3":               {PromptPer1M: 0.010595, CompletionPer1M: 0.052974, ReasoningPer1M: 0.052974},
 	"glm-5.3":               {PromptPer1M: 0.0102, CompletionPer1M: 0.032057, ReasoningPer1M: 0.032057},
 	"gpt-5.6-luna-a6":       {PromptPer1M: 0.0096, CompletionPer1M: 0.0096, ReasoningPer1M: 0.0096},
@@ -30,6 +32,15 @@ var DefaultPricingMatrix = map[string]ModelPricing{
 	// 🎀 自家 Hermes Agent 免费
 	"yui": {PromptPer1M: 0.0, CompletionPer1M: 0.0, ReasoningPer1M: 0.0},
 	"rin": {PromptPer1M: 0.0, CompletionPer1M: 0.0, ReasoningPer1M: 0.0},
+}
+
+// GetModelPricing 返回指定模型的单价
+func GetModelPricing(model string) ModelPricing {
+	pricing, ok := DefaultPricingMatrix[model]
+	if !ok {
+		pricing = DefaultPricingMatrix["gemini-3.8-flash"]
+	}
+	return pricing
 }
 
 // CalculateCost 财务计费核心算法: 计算美金开销与折合人民币开销
