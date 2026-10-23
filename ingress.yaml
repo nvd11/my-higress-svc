@@ -1,5 +1,5 @@
 # ==============================================================================
-# Higress Ingress 业务入口绑定配置
+# Higress Ingress 业务入口绑定配置 (原生 Envoy 直通 A6 API)
 # ==============================================================================
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -10,8 +10,12 @@ metadata:
     app.kubernetes.io/name: higress-ai-gateway
     app.kubernetes.io/part-of: my-higress-svc
   annotations:
-    higress.io/backend-protocol: HTTP
-    higress.io/destination: gemini-adapter.dns
+    higress.io/backend-protocol: HTTPS
+    higress.io/destination: a6api.dns
+    higress.io/upstream-vhost: api.a6api.com
+    # 🎯 授权头由集群运行时注入真实 Key，由 ArgoCD ignoreDifferences 纳管避免泄露
+    higress.io/request-header-control-update: |
+      Authorization Bearer A6_API_KEY_PLACEHOLDER
 spec:
   ingressClassName: higress
   rules:
