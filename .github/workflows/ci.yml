@@ -37,10 +37,17 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Compile Wasm Binary via TinyGo Container
+      - name: Setup Go 1.24 for Native Wasm Build
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: plugins/finops-audit/go.sum
+
+      - name: Compile Native Wasm Binary (wasip1/c-shared)
         run: |
-          docker run --rm --user root -v ${{ github.workspace }}/plugins/finops-audit:/src -w /src tinygo/tinygo:latest tinygo build -o plugin.wasm -scheduler=none -target=wasi .
-          echo "Wasm binary compiled successfully: $(ls -lh plugins/finops-audit/plugin.wasm | awk '{print $5}')"
+          cd plugins/finops-audit
+          CGO_ENABLED=0 GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o plugin.wasm .
+          echo "Wasm binary compiled successfully: $(ls -lh plugin.wasm | awk '{print $5}')"
 
       - name: Upload Wasm Artifact
         uses: actions/upload-artifact@v4
