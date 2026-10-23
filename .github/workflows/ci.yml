@@ -37,17 +37,17 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Compile Native Wasm Binary via TinyGo
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: plugins/finops-audit/go.sum
+
+      - name: Compile Native Wasm Binary via Go 1.24 wasip1
         run: |
-          docker run --rm -v ${{ github.workspace }}/plugins/finops-audit:/src -w /src tinygo/tinygo:latest tinygo build -o plugin.wasm -scheduler=coroutines -target=wasi -gc=custom -tags="custommalloc nottinygc_finalizer proxy_wasm_version_0_2_100" .
-          echo "Wasm binary compiled successfully: $(ls -lh plugins/finops-audit/plugin.wasm | awk '{print $5}')"
-          
-      - name: Verify WASI Imports in Wasm Binary
-        run: |
-          sudo apt-get update && sudo apt-get install -y wabt
           cd plugins/finops-audit
-          echo "Listing all imports in TinyGo plugin.wasm:"
-          wasm-objdump -j Import -x plugin.wasm
+          CGO_ENABLED=0 GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o plugin.wasm .
+          echo "Wasm binary compiled successfully: $(ls -lh plugin.wasm | awk '{print $5}')"
 
       - name: Upload Wasm Artifact
         uses: actions/upload-artifact@v4
