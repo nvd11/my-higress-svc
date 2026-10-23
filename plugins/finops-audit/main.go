@@ -1,10 +1,9 @@
 package main
 
 import (
+	"strconv"
 	"strings"
-	"time"
 
-	"github.com/google/uuid"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
@@ -15,7 +14,6 @@ import (
 const (
 	pluginName = "finops-audit"
 
-	ctxStartTime      = "start_time"
 	ctxRequestID      = "request_id"
 	ctxAPIKeyAlias    = "api_key_alias"
 	ctxModelRequested = "model_requested"
@@ -56,11 +54,9 @@ func parseConfig(json gjson.Result, config *PluginConfig) error {
 }
 
 func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig) types.Action {
-	ctx.SetContext(ctxStartTime, time.Now())
-
 	reqID, _ := proxywasm.GetHttpRequestHeader("x-request-id")
 	if reqID == "" {
-		reqID = "chatcmpl-" + uuid.NewString()
+		reqID = finops.GenerateRequestID()
 	}
 	ctx.SetContext(ctxRequestID, reqID)
 
@@ -126,14 +122,12 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config PluginConfig, c
 
 	if isLastChunk {
 		fullResponse, _ := ctx.GetContext(ctxResponseBody).(string)
-		startVal := ctx.GetContext(ctxStartTime)
-		var startTime time.Time
-		if t, ok := startVal.(time.Time); ok {
-			startTime = t
-		} else {
-			startTime = time.Now()
+		latency := 0
+		if val, err := proxywasm.GetHttpResponseHeader("x-envoy-upstream-service-time"); err == nil && val != "" {
+			if ms, err := strconv.Atoi(val); err == nil {
+				latency = ms
+			}
 		}
-		latency := int(time.Since(startTime).Milliseconds())
 
 		reqID, _ := ctx.GetContext(ctxRequestID).(string)
 		apiKeyAlias, _ := ctx.GetContext(ctxAPIKeyAlias).(string)
@@ -181,7 +175,7 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config PluginConfig, c
 		}
 
 		auditRecord := AuditLogRecord{
-			ID:                     uuid.NewString(),
+			ID:                     finops.GenerateUUID(),
 			RequestID:              reqID,
 			APIKeyAlias:            apiKeyAlias,
 			ModelRequested:         modelRequested,
@@ -201,7 +195,6 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config PluginConfig, c
 			FxRate:                 config.DefaultFxRate,
 			LatencyMS:              latency,
 			StatusCode:             statusCode,
-			CreatedAt:              time.Now(),
 			Prompt:                 prompt,
 			Response:               fullResponse,
 		}
