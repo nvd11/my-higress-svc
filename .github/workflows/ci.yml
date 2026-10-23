@@ -18,7 +18,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.24'
           cache-dependency-path: plugins/finops-audit/go.sum
 
       - name: Execute FinOps Core Unit Tests
@@ -39,7 +39,7 @@ jobs:
 
       - name: Compile Wasm Binary via TinyGo Container
         run: |
-          docker run --rm -e GOTOOLCHAIN=local -v ${{ github.workspace }}/plugins/finops-audit:/src -w /src tinygo/tinygo:0.33.0 tinygo build -o plugin.wasm -target=wasi -gc=custom -tags="custom_malloc" .
+          docker run --rm -v ${{ github.workspace }}/plugins/finops-audit:/src -w /src tinygo/tinygo:latest tinygo build -o plugin.wasm -target=wasi -gc=custom -tags="custom_malloc" .
           echo "Wasm binary compiled successfully: $(ls -lh plugins/finops-audit/plugin.wasm | awk '{print $5}')"
 
       - name: Upload Wasm Artifact
