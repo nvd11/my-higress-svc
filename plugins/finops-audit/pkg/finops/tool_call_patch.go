@@ -2,10 +2,8 @@ package finops
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -42,7 +40,7 @@ func RepairMalformedChunk(rawChunkJSON string, rawGeminiSnippet string) (repaire
 				fnArgs = "{}"
 			}
 
-			callID := fmt.Sprintf("call_%s", uuid.NewString()[:8])
+			callID := GenerateCallID()
 			toolCallObj := map[string]interface{}{
 				"id":    callID,
 				"type":  "function",

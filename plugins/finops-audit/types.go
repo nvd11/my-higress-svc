@@ -1,8 +1,6 @@
 package main
 
 import (
-	"time"
-
 	"github.com/nvd11/my-higress-svc/plugins/finops-audit/pkg/finops"
 )
 
@@ -41,7 +39,6 @@ type AuditLogRecord struct {
 	LatencyMS              int       `json:"latency_ms"`
 	StatusCode             int       `json:"status_code"`
 	ErrorMsg               *string   `json:"error_msg"`
-	CreatedAt              time.Time `json:"created_at"`
 	// 携带原始报文供给 Dashboard-API 写入 Redis 与 VictoriaLogs
 	Prompt   string `json:"prompt,omitempty"`
 	Response string `json:"response,omitempty"`
