@@ -1,6 +1,6 @@
 module github.com/nvd11/my-higress-svc/plugins/finops-audit
 
-go 1.23
+go 1.24.1
 
 require (
 	github.com/google/uuid v1.6.0
