@@ -1,6 +1,6 @@
 module github.com/nvd11/my-higress-svc/plugins/finops-audit
 
-go 1.23.0
+go 1.24.1
 
 require (
 	github.com/higress-group/proxy-wasm-go-sdk v0.0.0-20251103120604-77e9cce339d2
