@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
 set -e
-echo "📦 Building Wasm binary (tinygo wasi with -scheduler=none)..."
-tinygo build -o plugin.wasm -scheduler=none -target=wasi .
+echo "📦 Building Wasm binary (Higress official Go 1.24+ wasip1/c-shared)..."
+CGO_ENABLED=0 GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o plugin.wasm .
 echo "✅ Build completed: plugin.wasm ($(ls -lh plugin.wasm | awk '{print $5}'))"
