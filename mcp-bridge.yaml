@@ -22,3 +22,9 @@ spec:
       type: dns
       domain: cn.meta-api.vip
       port: 443
+
+    # 📊 Dashboard 审计入库与透视后端 (提供 Envoy Wasm 插件异步上报通道)
+    - name: dashboard-backend
+      type: dns
+      domain: higress-dashboard-backend.higress-system.svc.cluster.local
+      port: 4000
