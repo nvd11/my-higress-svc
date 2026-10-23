@@ -54,6 +54,9 @@ func parseConfig(json gjson.Result, config *PluginConfig) error {
 }
 
 func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig) types.Action {
+	// 允许超大长文本上下文（支持高达 50MB 请求体，彻底根治 100k+ 超长 Token 413 Payload Too Large）
+	ctx.SetRequestBodyBufferLimit(50 * 1024 * 1024)
+
 	reqID, _ := proxywasm.GetHttpRequestHeader("x-request-id")
 	if reqID == "" {
 		reqID = finops.GenerateRequestID()
