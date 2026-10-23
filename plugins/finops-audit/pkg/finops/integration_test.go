@@ -22,6 +22,10 @@ import (
 // TestE2EProductionGatewayWithRedisAndVLogs 端到端实测生产环境
 // 链路: 发送真实请求 -> 获取 request_id -> 验证 Redis 缓存 -> 验证 VictoriaLogs 归档
 func TestE2EProductionGatewayWithRedisAndVLogs(t *testing.T) {
+	if os.Getenv("CI") == "true" && os.Getenv("RUN_E2E_TESTS") != "true" {
+		t.Skip("Skipping live E2E integration test in CI without private network access")
+	}
+
 	gatewayURL := os.Getenv("HIGRESS_GATEWAY_URL")
 	if gatewayURL == "" {
 		gatewayURL = "http://100.105.130.0:31880/v1/chat/completions"
