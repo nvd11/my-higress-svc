@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -81,7 +82,7 @@ func SendToVictoriaLogs(client wrapper.HttpClient, targetURL string, payload Vic
 		{"Content-Encoding", "gzip"},
 	}
 
-	return client.Post(url, headers, compressed, func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
+	return client.Post(url, headers, compressed, func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 		// 旁路异步回调
 	}, 5000)
 }

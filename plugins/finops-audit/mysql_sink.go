@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
 
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
@@ -23,7 +24,7 @@ func SendToMySQLSink(client wrapper.HttpClient, targetURL string, record AuditLo
 	}
 
 	// 异步非阻塞 POST 派发
-	return client.Post(targetURL, headers, bodyBytes, func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
+	return client.Post(targetURL, headers, bodyBytes, func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 		// 旁路落库回调
 	}, 3000)
 }
