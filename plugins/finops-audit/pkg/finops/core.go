@@ -1,11 +1,7 @@
 package finops
 
 import (
-	"bytes"
-	"compress/gzip"
-	"fmt"
 	"math"
-	"regexp"
 	"strings"
 )
 
@@ -57,34 +53,6 @@ func CalculateCost(model string, promptTokens, completionTokens, reasoningTokens
 	costUSD = math.Round((pCost+cCost+rCost)*1000000) / 1000000
 	costCNY = math.Round((costUSD*fxRate)*1000000) / 1000000
 	return costUSD, costCNY
-}
-
-var base64ImageRegex = regexp.MustCompile(`data:image/[a-zA-Z0-9\.\+-]+;base64,([A-Za-z0-9+/=]{64,})`)
-
-// CollapseBase64Images 正则折叠报文中的 Base64 图片
-func CollapseBase64Images(raw string) string {
-	if len(raw) < 100 {
-		return raw
-	}
-	return base64ImageRegex.ReplaceAllStringFunc(raw, func(m string) string {
-		return fmt.Sprintf("[base64_image_collapsed: len=%d]", len(m))
-	})
-}
-
-// CompressGzip 在内存中进行 Gzip 快速压缩
-func CompressGzip(data []byte) ([]byte, error) {
-	var buf bytes.Buffer
-	zw, err := gzip.NewWriterLevel(&buf, gzip.BestSpeed)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := zw.Write(data); err != nil {
-		return nil, err
-	}
-	if err := zw.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
 }
 
 // ResolveVirtualKey 校验 Token 并解析出对应的租户标识 (api_key_alias)
