@@ -55,23 +55,36 @@ jobs:
       - name: Stub Unsupported WASI Imports for Envoy Runtime
         run: |
           cd plugins/finops-audit
-          wasi-stub plugin.wasm --stub-function wasi_snapshot_preview1:sched_yield -o plugin-s1.wasm
-          wasi-stub plugin-s1.wasm --stub-function wasi_snapshot_preview1:poll_oneoff -o plugin-stubbed.wasm
-          mv plugin-stubbed.wasm plugin.wasm
-          rm -f plugin-s1.wasm
+          funcs=(
+            sched_yield
+            poll_oneoff
+            path_filestat_get
+            path_open
+            fd_fdstat_get
+            fd_fdstat_set_flags
+            fd_prestat_get
+            fd_prestat_dir_name
+            fd_close
+            fd_read
+          )
+          for f in "${funcs[@]}"; do
+            echo "Stubbing wasi_snapshot_preview1:$f"
+            wasi-stub plugin.wasm --stub-function wasi_snapshot_preview1:"$f" -o plugin-tmp.wasm
+            mv plugin-tmp.wasm plugin.wasm
+          done
           echo "Wasm binary stubbed successfully: $(ls -lh plugin.wasm | awk '{print $5}')"
           
       - name: Verify WASI Imports in Wasm Binary
         run: |
           sudo apt-get update && sudo apt-get install -y wabt
           cd plugins/finops-audit
-          echo "Checking remaining imports in stubbed plugin.wasm:"
+          echo "Listing all imports in stubbed plugin.wasm:"
           wasm-objdump -j Import -x plugin.wasm
-          if wasm-objdump -j Import -x plugin.wasm | grep -E "sched_yield|poll_oneoff"; then
-            echo "ERROR: sched_yield or poll_oneoff is still present in plugin.wasm!"
+          if wasm-objdump -j Import -x plugin.wasm | grep -E "sched_yield|poll_oneoff|path_filestat_get|path_open|fd_fdstat_get|fd_prestat_get"; then
+            echo "ERROR: Unsupported WASI symbols still present in plugin.wasm!"
             exit 1
           fi
-          echo "SUCCESS: Both sched_yield and poll_oneoff were stubbed cleanly!"
+          echo "SUCCESS: All unsupported WASI symbols were stubbed cleanly!"
 
       - name: Upload Wasm Artifact
         uses: actions/upload-artifact@v4
