@@ -88,7 +88,6 @@ func TestInternalAuditLogIngestion(t *testing.T) {
 
 	// 3.2 测试合法 Body (200 OK)
 	validRecord := WasmAuditRecordInput{
-		ID:               "test-audit-id-1",
 		RequestID:        "chatcmpl-test-abc",
 		APIKeyAlias:      "cindy-test",
 		ModelRequested:   "gemini-3.8-flash",
