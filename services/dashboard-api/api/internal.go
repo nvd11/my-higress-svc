@@ -18,7 +18,6 @@ import (
 )
 
 type WasmAuditRecordInput struct {
-	ID                     string    `json:"id"`
 	RequestID              string    `json:"request_id"`
 	APIKeyAlias            string    `json:"api_key_alias"`
 	ModelRequested         string    `json:"model_requested"`

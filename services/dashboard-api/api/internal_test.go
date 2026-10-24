@@ -58,15 +58,15 @@ func TestAuditRowIDSeparatesSameRequestID(t *testing.T) {
 	}
 }
 
-// 复现线上事故: 插件送来的伪随机 id 相同的两条记录，
-// 只要 request_id/createdAt 不同，就应该算成不同的行（不再撞 PRIMARY KEY）
+// 复现线上事故: 旧插件会用重放的伪随机 ID 上报多条不同请求，
+// 行主键必须只由 (request_id, created_at) 决定, 与插件自报 ID 无关。
 func TestAuditRowIDIgnoresPluginID(t *testing.T) {
 	a := testRecord()
 	b := testRecord()
 	b.RequestID = "another-request"
-	b.ID = a.ID // 模拟插件 PRNG 重放出的同一个伪随机 ID
+	b.CreatedAt = a.CreatedAt // 连创建时间都相同, 也必须区分开
 
 	if auditRowID(a) == auditRowID(b) {
-		t.Fatalf("plugin-provided ID must not influence row id")
+		t.Fatalf("row id must depend solely on request_id + created_at")
 	}
 }

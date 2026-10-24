@@ -58,8 +58,14 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig) types.Ac
 	ctx.SetRequestBodyBufferLimit(50 * 1024 * 1024)
 
 	reqID, _ := proxywasm.GetHttpRequestHeader("x-request-id")
+	forwarded, _ := proxywasm.GetHttpRequestHeader("x-forwarded-for")
+	userAgent, _ := proxywasm.GetHttpRequestHeader("user-agent")
+
+	// 用请求自带熵播种 PRNG: Wasm 沙箱没有系统随机源, 固定种子会在模块
+	// 重新实例化后重放同一串 ID (历史事故: PRIMARY KEY 冲突导致丢单)
+	finops.Seed(reqID, forwarded, userAgent)
 	if reqID == "" {
-		reqID = finops.GenerateRequestID()
+		reqID = finops.GenerateRequestID(forwarded + "|" + userAgent)
 	}
 	ctx.SetContext(ctxRequestID, reqID)
 
@@ -177,8 +183,8 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config PluginConfig, c
 			providerKeyAlias = "OPENAI_API_KEY_FREE_3"
 		}
 
+		// 行主键由 Dashboard-API 依据 (request_id, created_at) 派生, 插件不再生成随机 ID
 		auditRecord := AuditLogRecord{
-			ID:                     finops.GenerateUUID(),
 			RequestID:              reqID,
 			APIKeyAlias:            apiKeyAlias,
 			ModelRequested:         modelRequested,

@@ -40,7 +40,8 @@ func RepairMalformedChunk(rawChunkJSON string, rawGeminiSnippet string) (repaire
 				fnArgs = "{}"
 			}
 
-			callID := GenerateCallID()
+			// 用所属 chunk 的 id 作为 salt: 同一响应内多次修复也不会拿到同一个工具 ID
+			callID := GenerateCallID(parsed.Get("id").String() + "|" + fnName)
 			toolCallObj := map[string]interface{}{
 				"id":    callID,
 				"type":  "function",
