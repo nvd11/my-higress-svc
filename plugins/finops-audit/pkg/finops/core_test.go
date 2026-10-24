@@ -44,4 +44,14 @@ func TestResolveVirtualKey(t *testing.T) {
 	if ok || alias != "" {
 		t.Errorf("want empty/false, got %s (ok=%v)", alias, ok)
 	}
+
+	alias, ok = ResolveVirtualKey("", vkeys)
+	if ok || alias != "" {
+		t.Errorf("want empty/false for empty authHeader, got %s (ok=%v)", alias, ok)
+	}
+
+	alias, ok = ResolveVirtualKey("Bearer   ", vkeys)
+	if ok || alias != "" {
+		t.Errorf("want empty/false for whitespace token, got %s (ok=%v)", alias, ok)
+	}
 }

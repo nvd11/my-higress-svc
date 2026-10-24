@@ -54,6 +54,16 @@ func parseConfig(json gjson.Result, config *PluginConfig) error {
 }
 
 func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig) types.Action {
+	// 放行 OPTIONS 跨域预检请求与基础健康检查
+	method, _ := proxywasm.GetHttpRequestHeader(":method")
+	if strings.EqualFold(method, "OPTIONS") {
+		return types.ActionContinue
+	}
+	path, _ := proxywasm.GetHttpRequestHeader(":path")
+	if path == "/health" || path == "/healthz" || path == "/ping" {
+		return types.ActionContinue
+	}
+
 	// 允许超大长文本上下文（支持高达 50MB 请求体，彻底根治 100k+ 超长 Token 413 Payload Too Large）
 	ctx.SetRequestBodyBufferLimit(50 * 1024 * 1024)
 
@@ -69,13 +79,26 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig) types.Ac
 	}
 	ctx.SetContext(ctxRequestID, reqID)
 
-	// 1. 优先从 Authorization: Bearer <TOKEN> 匹配 VirtualKeys 字典
+	// 1. 从 Authorization: Bearer <TOKEN> 或 api-key / x-api-key 匹配 VirtualKeys 字典
 	authHeader, _ := proxywasm.GetHttpRequestHeader("authorization")
 	token := strings.TrimPrefix(authHeader, "Bearer ")
 	token = strings.TrimSpace(token)
+	if token == "" {
+		token, _ = proxywasm.GetHttpRequestHeader("api-key")
+		token = strings.TrimSpace(token)
+	}
+	if token == "" {
+		token, _ = proxywasm.GetHttpRequestHeader("x-api-key")
+		token = strings.TrimSpace(token)
+	}
 
 	consumer := ""
-	if token != "" && len(config.VirtualKeys) > 0 {
+	if len(config.VirtualKeys) > 0 {
+		if token == "" {
+			// 未携带任何认证 Token，严防匿名免鉴权穿透
+			_ = proxywasm.SendHttpResponse(401, [][2]string{{"Content-Type", "application/json"}}, []byte(`{"error":{"message":"Missing Bearer Token or API Key","type":"invalid_request_error","code":"unauthorized"}}`), -1)
+			return types.ActionPause
+		}
 		if alias, ok := config.VirtualKeys[token]; ok {
 			consumer = alias
 		} else {

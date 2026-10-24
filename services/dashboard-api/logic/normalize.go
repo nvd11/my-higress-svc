@@ -114,6 +114,13 @@ func normalizeResponse(responseObj map[string]interface{}) map[string]interface{
 		return nil
 	}
 
+	// 非流式响应: 上游直接返回完整 JSON (OpenAI chat.completion / Anthropic messages)
+	if !hasNonEmpty(responseObj, "reply") && !hasNonEmpty(responseObj, "raw_content") {
+		if enriched := normalizeCompletionObject(responseObj); enriched != nil {
+			return enriched
+		}
+	}
+
 	raw := asString(responseObj["reply"])
 	if raw == "" {
 		raw = asString(responseObj["raw_content"])
@@ -145,6 +152,103 @@ func normalizeResponse(responseObj map[string]interface{}) map[string]interface{
 		out["usage"] = agg.usage
 	}
 	return out
+}
+
+// normalizeCompletionObject 把"已经结构化的非流式响应体"补齐成
+// {reply, reasoning_content, tool_calls}，让非流式调用也能正常展示。
+// 返回 nil 表示不是可识别的响应结构，交给调用方原样透出。
+func normalizeCompletionObject(responseObj map[string]interface{}) map[string]interface{} {
+	reply, reasoning, toolCalls := extractCompletionViews(responseObj)
+	if reply == "" && reasoning == "" && len(toolCalls) == 0 {
+		return nil
+	}
+
+	out := make(map[string]interface{}, len(responseObj)+3)
+	for k, v := range responseObj {
+		out[k] = v
+	}
+	out["reply"] = reply
+	if reasoning != "" {
+		out["reasoning_content"] = reasoning
+	}
+	if len(toolCalls) > 0 {
+		out["tool_calls"] = toolCalls
+	}
+	return out
+}
+
+// extractCompletionViews 从 OpenAI chat.completion 或 Anthropic messages 响应体中
+// 抽取正文、思维链与工具调用
+func extractCompletionViews(responseObj map[string]interface{}) (string, string, []map[string]interface{}) {
+	// --- OpenAI chat.completion ---
+	if choices, ok := responseObj["choices"].([]interface{}); ok && len(choices) > 0 {
+		if ch, ok := choices[0].(map[string]interface{}); ok {
+			if msg, ok := ch["message"].(map[string]interface{}); ok {
+				var calls []map[string]interface{}
+				if list, ok := msg["tool_calls"].([]interface{}); ok {
+					for _, item := range list {
+						if m, ok := item.(map[string]interface{}); ok {
+							calls = append(calls, m)
+						}
+					}
+				}
+				return asString(msg["content"]), asString(msg["reasoning_content"]), calls
+			}
+		}
+	}
+
+	// --- Anthropic messages: content 是 block 数组 ---
+	if blocks, ok := responseObj["content"].([]interface{}); ok {
+		var text strings.Builder
+		var reasoning strings.Builder
+		var calls []map[string]interface{}
+		matched := false
+		for _, item := range blocks {
+			m, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			switch asString(m["type"]) {
+			case "text":
+				text.WriteString(asString(m["text"]))
+				matched = true
+			case "thinking":
+				reasoning.WriteString(asString(m["thinking"]))
+				matched = true
+			case "tool_use":
+				calls = append(calls, map[string]interface{}{
+					"id":   asString(m["id"]),
+					"type": "function",
+					"function": map[string]interface{}{
+						"name":      asString(m["name"]),
+						"arguments": mustJSONString(m["input"]),
+					},
+				})
+				matched = true
+			}
+		}
+		if matched {
+			return text.String(), reasoning.String(), calls
+		}
+	}
+	return "", "", nil
+}
+
+func mustJSONString(v interface{}) string {
+	if v == nil {
+		return "{}"
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	if b, err := json.Marshal(v); err == nil {
+		return string(b)
+	}
+	return "{}"
+}
+
+func hasNonEmpty(m map[string]interface{}, key string) bool {
+	return asString(m[key]) != ""
 }
 
 type sseAggregate struct {
