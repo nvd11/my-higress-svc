@@ -4,14 +4,15 @@ on:
   push:
     branches: [ main ]
     paths:
-      - "plugins/finops-audit/**"
+      - "plugins/**"
       - "wasm-plugin.yaml"
       - "config.yaml"
       - ".github/workflows/wasm-plugin-ci-cd.yml"
   pull_request:
     branches: [ main ]
     paths:
-      - "plugins/finops-audit/**"
+      - "plugins/**"
+      - "wasm-plugin.yaml"
       - "config.yaml"
   workflow_dispatch:
 
@@ -21,7 +22,7 @@ concurrency:
 
 jobs:
   test:
-    name: Run Unit Tests
+    name: Run Unit Tests & Drift Guard
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -31,27 +32,87 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.24'
-          cache-dependency-path: plugins/finops-audit/go.sum
 
-      - name: Regenerate Pricing Table from config.yaml
+      - name: Regenerate Pricing & Gatekeeper Models from config.yaml
         run: |
           cd plugins/finops-audit
-          CGO_ENABLED=0 go run internal/pricinggen/main.go -config ../../config.yaml -out pkg/finops/pricing_gen.go
+          CGO_ENABLED=0 go run internal/pricinggen/main.go -config ../../config.yaml -out pkg/finops/pricing_gen.go -gatekeeper-out ../ai-gatekeeper/models_gen.go
 
-      - name: Verify Generated Pricing Is In Sync With config.yaml
+      - name: Verify Generated Artifacts In Sync (G8 Fingerprint Lock)
         run: |
-          if ! git diff --exit-code plugins/finops-audit/pkg/finops/pricing_gen.go; then
-            echo "::error::pkg/finops/pricing_gen.go 与 config.yaml 漂移。请在 plugins/finops-audit 下运行: go run internal/pricinggen/main.go"
+          if ! git diff --exit-code plugins/finops-audit/pkg/finops/pricing_gen.go plugins/ai-gatekeeper/models_gen.go; then
+            echo "::error::pricing_gen.go 或 models_gen.go 与 config.yaml 产生漂移！请运行: go run internal/pricinggen/main.go"
             exit 1
           fi
 
-      - name: Execute FinOps Core Unit Tests
+      - name: Validate WasmPlugin Specifications & VirtualKeys Consistency
+        run: |
+          python3 -c "
+          import re, sys
+
+          with open('wasm-plugin.yaml', 'r') as f:
+              content = f.read()
+
+          docs = content.split('---')
+          plugins = {}
+          for doc in docs:
+              name_match = re.search(r'name:\s*([a-zA-Z0-9_-]+)', doc)
+              if name_match:
+                  pname = name_match.group(1)
+                  plugins[pname] = doc
+
+          assert 'ai-gatekeeper' in plugins, 'ai-gatekeeper missing in wasm-plugin.yaml'
+          assert 'finops-audit' in plugins, 'finops-audit missing in wasm-plugin.yaml'
+
+          # Check failStrategy enum
+          for pname, doc in plugins.items():
+              strat_match = re.search(r'failStrategy:\s*([a-zA-Z0-9_-]+)', doc)
+              if strat_match:
+                  strat = strat_match.group(1)
+                  assert strat in ['FAIL_OPEN', 'FAIL_CLOSE'], f'Illegal failStrategy {strat} in {pname}! Must be FAIL_OPEN or FAIL_CLOSE.'
+
+          # Extract virtual_keys from both
+          def get_vkeys(doc):
+              lines = doc.splitlines()
+              keys = {}
+              in_vk = False
+              for l in lines:
+                  if 'virtual_keys:' in l:
+                      in_vk = True
+                      continue
+                  if in_vk:
+                      if re.match(r'^\s{6,}[a-zA-Z0-9_-]+:', l):
+                          break
+                      m = re.search(r'\"(sk-[^\"]+)\":\s*\"([^\"]+)\"', l)
+                      if m:
+                          keys[m.group(1)] = m.group(2)
+                      elif l.strip() == '' or l.strip().startswith('#'):
+                          continue
+                      elif not l.startswith(' '):
+                          break
+              return keys
+
+          gk_keys = get_vkeys(plugins['ai-gatekeeper'])
+          fa_keys = get_vkeys(plugins['finops-audit'])
+
+          assert len(gk_keys) > 0, 'ai-gatekeeper virtual_keys cannot be empty!'
+          assert len(fa_keys) > 0, 'finops-audit virtual_keys cannot be empty!'
+          assert gk_keys == fa_keys, f'virtual_keys mismatch! Gatekeeper has {len(gk_keys)}, FinOps has {len(fa_keys)}'
+          print(f'✅ All {len(gk_keys)} virtual_keys are 100% matched and consistent!')
+          "
+
+      - name: Execute FinOps Audit Unit Tests
         run: |
           cd plugins/finops-audit
-          CGO_ENABLED=0 go test -v ./pkg/finops ./internal/chargeconfig
+          CGO_ENABLED=0 go test -v ./...
+
+      - name: Execute AI Gatekeeper Unit Tests
+        run: |
+          cd plugins/ai-gatekeeper
+          CGO_ENABLED=0 go test -v ./...
 
   build-and-deploy:
-    name: Build, Publish & GitOps Deploy Wasm Plugin
+    name: Build, Publish & GitOps Deploy Wasm Plugins
     runs-on: ubuntu-latest
     needs: test
     permissions:
@@ -67,20 +128,27 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.24'
-          cache-dependency-path: plugins/finops-audit/go.sum
 
-      - name: Compile Native Wasm Binary via Go 1.24 wasip1
+      - name: Compile Native Wasm Binaries via Go 1.24 wasip1
         run: |
+          echo "Compiling finops-audit..."
           cd plugins/finops-audit
-          CGO_ENABLED=0 go run internal/pricinggen/main.go -config ../../config.yaml -out pkg/finops/pricing_gen.go
-          CGO_ENABLED=0 GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o plugin.wasm .
-          echo "Wasm binary compiled successfully: $(ls -lh plugin.wasm | awk '{print $5}')"
+          CGO_ENABLED=0 go run internal/pricinggen/main.go -config ../../config.yaml -out pkg/finops/pricing_gen.go -gatekeeper-out ../ai-gatekeeper/models_gen.go
+          CGO_ENABLED=0 GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -buildvcs=false -o plugin.wasm .
+          echo "finops-audit Wasm: $(ls -lh plugin.wasm | awk '{print $5}')"
 
-      - name: Upload Wasm Artifact
+          echo "Compiling ai-gatekeeper..."
+          cd ../ai-gatekeeper
+          CGO_ENABLED=0 GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -buildvcs=false -o plugin.wasm .
+          echo "ai-gatekeeper Wasm: $(ls -lh plugin.wasm | awk '{print $5}')"
+
+      - name: Upload Wasm Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: finops-audit-wasm
-          path: plugins/finops-audit/plugin.wasm
+          name: higress-wasm-plugins
+          path: |
+            plugins/finops-audit/plugin.wasm
+            plugins/ai-gatekeeper/plugin.wasm
 
       - name: Set up Docker Buildx
         if: github.ref == 'refs/heads/main'
@@ -94,9 +162,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and Push Wasm OCI Image
+      - name: Build and Push finops-audit Wasm OCI Image
         if: github.ref == 'refs/heads/main'
-        id: docker_build
         uses: docker/build-push-action@v6
         with:
           context: plugins/finops-audit
@@ -106,19 +173,31 @@ jobs:
             ghcr.io/nvd11/higress-finops-audit:latest
             ghcr.io/nvd11/higress-finops-audit:${{ github.sha }}
 
+      - name: Build and Push ai-gatekeeper Wasm OCI Image
+        if: github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v6
+        with:
+          context: plugins/ai-gatekeeper
+          file: plugins/ai-gatekeeper/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/nvd11/higress-ai-gatekeeper:latest
+            ghcr.io/nvd11/higress-ai-gatekeeper:${{ github.sha }}
+
       - name: GitOps Write-Back (Update wasm-plugin.yaml)
         if: github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
-          echo "Updating wasm-plugin.yaml to image tag: ${{ github.sha }}"
+          echo "Updating wasm-plugin.yaml to commit tag: ${{ github.sha }}"
           sed -i -E "s|url: oci://ghcr.io/nvd11/higress-finops-audit:.*|url: oci://ghcr.io/nvd11/higress-finops-audit:${{ github.sha }}|g" wasm-plugin.yaml
+          sed -i -E "s|url: oci://ghcr.io/nvd11/higress-ai-gatekeeper:.*|url: oci://ghcr.io/nvd11/higress-ai-gatekeeper:${{ github.sha }}|g" wasm-plugin.yaml
 
           if ! git diff --quiet wasm-plugin.yaml; then
             echo "Changes detected in wasm-plugin.yaml, committing..."
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add wasm-plugin.yaml
-            git commit -m "chore(gitops): bump finops-audit wasm image to ${{ github.sha }} [skip ci]"
+            git commit -m "chore(gitops): bump wasm plugin images to ${{ github.sha }} [skip ci]"
             git push origin main
             echo "✅ Successfully updated wasm-plugin.yaml with SHA ${{ github.sha }}"
           else

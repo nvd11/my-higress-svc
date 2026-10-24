@@ -26,36 +26,6 @@ const (
 	maxBodyBufferSize = 50 * 1024 * 1024 // 50MB 缓冲上限 (R-1 阻塞防护)
 )
 
-// 默认 10 个标准主名 (防卫配置缺失时的兜底)
-var defaultCanonicalModels = []string{
-	"gemini-4-argon",
-	"gemini-4-argon-search",
-	"gemini-3.8-flash",
-	"gemini-3.8-flash-search",
-	"kimi-k3",
-	"glm-5.3",
-	"hy3",
-	"hy4-preview",
-	"gpt-5.6-luna",
-	"deepseek-v4-pro-0813",
-}
-
-// 默认 12 个别名映射 (防卫配置缺失时的兜底)
-var defaultAliases = map[string]string{
-	"gemini-4":                "gemini-4-argon",
-	"gemini-4-flash":          "gemini-4-argon",
-	"gemini-4:search":         "gemini-4-argon-search",
-	"gemini-4-search":         "gemini-4-argon-search",
-	"gemini-3.8":              "gemini-3.8-flash",
-	"gemini-2.5-flash":        "gemini-3.8-flash",
-	"gemini-3.8-flash:search": "gemini-3.8-flash-search",
-	"kimi":                    "kimi-k3",
-	"glm":                     "glm-5.3",
-	"hunyuan3":                "hy3",
-	"luna":                    "gpt-5.6-luna",
-	"gpt-5.6-luna-a6":         "gpt-5.6-luna",
-}
-
 func main() {}
 
 func init() {
