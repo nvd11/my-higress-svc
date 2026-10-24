@@ -20,10 +20,10 @@ func TestCalculateCost(t *testing.T) {
 		t.Errorf("costCNY = %f; want %f", costCNY, expectedCNY)
 	}
 
-	// 针对 DeepSeek V4 Pro: 1M 输入 (无缓存) + 1M 输出 = 0.00096 + 0.00096
+	// DeepSeek V4 Pro: 1M 输入 (无缓存) + 1M 输出 = 0.00096 + 0.00354
 	dsUSD, dsCNY, declared := CalculateCost("deepseek-v4-pro-0813", 1000000, 1000000, 0, 7.23)
-	expectedDsUSD := 0.00192
-	expectedDsCNY := 0.013882
+	expectedDsUSD := 0.0045
+	expectedDsCNY := 0.032535
 	if !declared {
 		t.Fatalf("deepseek-v4-pro-0813 应命中 config.yaml 价目")
 	}

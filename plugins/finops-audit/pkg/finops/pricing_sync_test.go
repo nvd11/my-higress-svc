@@ -76,6 +76,23 @@ func TestUndeclaredModelsAreNotPriced(t *testing.T) {
 	}
 }
 
+// TestPricingInvariants 守卫 config.yaml 的三段价目不会写反:
+// 缓存读不得贵于输入 (否则缓存命中反而更亏), 输出不得便宜于输入。
+func TestPricingInvariants(t *testing.T) {
+	for _, name := range DeclaredModels() {
+		p, ok := GetModelPricing(name)
+		if !ok {
+			t.Fatalf("%q 未命中价目表", name)
+		}
+		if p.CacheReadPer1M > p.PromptPer1M {
+			t.Errorf("%s: 缓存读价 %v 高于输入价 %v (疑似写反)", name, p.CacheReadPer1M, p.PromptPer1M)
+		}
+		if p.CompletionPer1M < p.PromptPer1M {
+			t.Errorf("%s: 输出价 %v 低于输入价 %v (疑似写反)", name, p.CompletionPer1M, p.PromptPer1M)
+		}
+	}
+}
+
 func providerKeyAlias(apiKey string) string {
 	const prefix = "os.environ/"
 	if len(apiKey) > len(prefix) && apiKey[:len(prefix)] == prefix {
