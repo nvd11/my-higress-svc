@@ -238,3 +238,112 @@ func TestNormalizeResponse_Idempotent(t *testing.T) {
 		t.Errorf("非 SSE 不应写入 raw_stream")
 	}
 }
+
+// 非流式请求: 上游返回完整 OpenAI JSON, 必须能抽出 reply / reasoning / tool_calls
+func TestNormalizeResponse_NonStreamingOpenAI(t *testing.T) {
+	fixture := map[string]interface{}{
+		"id":     "chatcmpl-6adc7be41d517",
+		"object": "chat.completion",
+		"model":  "deepseek-v4-pro",
+		"choices": []interface{}{
+			map[string]interface{}{
+				"index":         0,
+				"finish_reason": "stop",
+				"message": map[string]interface{}{
+					"role":              "assistant",
+					"content":           "通了",
+					"reasoning_content": "用户只要两个字",
+				},
+			},
+		},
+		"usage": map[string]interface{}{"prompt_tokens": 18108.0, "total_tokens": 19135.0},
+	}
+
+	_, got := NormalizePayload(nil, fixture)
+	if got["reply"] != "通了" {
+		t.Errorf("非流式 reply 抽取失败: %v", got["reply"])
+	}
+	if got["reasoning_content"] != "用户只要两个字" {
+		t.Errorf("非流式 reasoning 抽取失败: %v", got["reasoning_content"])
+	}
+	if _, ok := got["usage"]; !ok {
+		t.Errorf("usage 必须保留")
+	}
+	if _, ok := fixture["reply"]; ok {
+		t.Errorf("不应原地修改入参")
+	}
+}
+
+// 非流式 OpenAI: tool_calls 也要抽出来
+func TestNormalizeResponse_NonStreamingToolCalls(t *testing.T) {
+	fixture := map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"message": map[string]interface{}{
+					"role":    "assistant",
+					"content": nil,
+					"tool_calls": []interface{}{
+						map[string]interface{}{
+							"id":   "call_abc",
+							"type": "function",
+							"function": map[string]interface{}{
+								"name":      "read_file",
+								"arguments": `{"path":"a.go"}`,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	_, got := NormalizePayload(nil, fixture)
+	tcs, ok := got["tool_calls"].([]map[string]interface{})
+	if !ok || len(tcs) != 1 {
+		t.Fatalf("tool_calls 抽取失败: %v", got["tool_calls"])
+	}
+	if tcs[0]["id"] != "call_abc" {
+		t.Errorf("tool id 丢失: %v", tcs[0]["id"])
+	}
+}
+
+// 非流式 Anthropic: content block 数组
+func TestNormalizeResponse_NonStreamingAnthropic(t *testing.T) {
+	fixture := map[string]interface{}{
+		"type": "message",
+		"content": []interface{}{
+			map[string]interface{}{"type": "thinking", "thinking": "想一下"},
+			map[string]interface{}{"type": "text", "text": "答案在这里"},
+			map[string]interface{}{"type": "tool_use", "id": "toolu_1", "name": "bash",
+				"input": map[string]interface{}{"cmd": "ls"}},
+		},
+	}
+
+	_, got := NormalizePayload(nil, fixture)
+	if got["reply"] != "答案在这里" {
+		t.Errorf("anthropic text 抽取失败: %v", got["reply"])
+	}
+	if got["reasoning_content"] != "想一下" {
+		t.Errorf("anthropic thinking 抽取失败: %v", got["reasoning_content"])
+	}
+	tcs, ok := got["tool_calls"].([]map[string]interface{})
+	if !ok || len(tcs) != 1 {
+		t.Fatalf("anthropic tool_use 抽取失败: %v", got["tool_calls"])
+	}
+	fn := tcs[0]["function"].(map[string]interface{})
+	if fn["name"] != "bash" || fn["arguments"] != `{"cmd":"ls"}` {
+		t.Errorf("anthropic 工具参数错误: %v", fn)
+	}
+}
+
+// 无法识别的响应体必须原样透出，不能凭空造 reply
+func TestNormalizeResponse_UnknownShapeUntouched(t *testing.T) {
+	fixture := map[string]interface{}{"provider": "a6api", "foo": "bar"}
+	_, got := NormalizePayload(nil, fixture)
+	if _, ok := got["reply"]; ok {
+		t.Errorf("不应给未知结构强塞 reply")
+	}
+	if got["provider"] != "a6api" {
+		t.Errorf("原字段丢失")
+	}
+}
