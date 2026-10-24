@@ -1,6 +1,73 @@
 # ==============================================================================
-# 自研 FinOps 财务审计与 Token 计量 Envoy 原生 Wasm 插件挂载清单
+# 自研 Higress AI 网关双 Wasm 插件编排清单 (路线乙: 第一道门禁 + 第二道旁路审计)
 # ==============================================================================
+# 架构分工:
+# 1. ai-gatekeeper (Priority 900): 内存级硬门禁 (50MB缓冲、多跳ID清洗、Token鉴权、22键模型准入/改写、/v1/models本地直答)
+# 2. finops-audit  (Priority 90):  纯净旁路计量 (真实状态码捕获、Token统计、异步写入 VictoriaLogs 与 MySQL 账本)
+# ==============================================================================
+
+# --- 第一道防线: ai-gatekeeper ---
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: ai-gatekeeper
+  namespace: higress-system
+  labels:
+    app.kubernetes.io/name: higress-ai-gateway
+    app.kubernetes.io/part-of: my-higress-svc
+spec:
+  priority: 900
+  failStrategy: FAIL_OPEN # P3a-1 初次上线观察期，观察10分钟无误后切为 FAIL_CLOSE
+  imagePullPolicy: Always
+  matchRules:
+    - ingress:
+        - higress-system/higress-ai-ingress
+  url: oci://ghcr.io/nvd11/higress-ai-gatekeeper:latest
+  defaultConfig:
+    dashboard_api_url: "http://higress-dashboard-backend.higress-system.svc.cluster.local:4000/api/v1/internal/audit-log"
+    virtual_keys:
+      "sk-cindy-higress-20261003-888888": "cindy"
+      "sk-yui-higress-20261003-777777": "yui"
+      "sk-hebe-higress-20261003-999999": "hebe"
+      "sk-aurora-higress-20261011-888888": "aurora"
+      "sk-celia-higress-20261011-888888": "celia"
+      "sk-claire-higress-20261011-888888": "claire"
+      "sk-leona-higress-20261011-888888": "leona"
+      "sk-moon-higress-20261011-888888": "moon"
+      "sk-alice-higress-20261011-888888": "alice"
+      "sk-stella-higress-20261011-888888": "stella"
+      "sk-rin-higress-20261011-888888": "rin"
+      "sk-jayden-production-key": "jayden"
+      "sk-yui-40b9abf5a3612e48aa25111afbc4f813": "yui-agent"
+      "sk-rin-8f1d3c92e104b47a952a123456789abc": "rin-agent"
+      "sk-justin-v2-k9m4x7q2p8w5": "justin"
+    canonical_models:
+      - "gemini-4-argon"
+      - "gemini-4-argon-search"
+      - "gemini-3.8-flash"
+      - "gemini-3.8-flash-search"
+      - "kimi-k3"
+      - "glm-5.3"
+      - "hy3"
+      - "hy4-preview"
+      - "gpt-5.6-luna"
+      - "deepseek-v4-pro-0813"
+    aliases:
+      "gemini-4": "gemini-4-argon"
+      "gemini-4-flash": "gemini-4-argon"
+      "gemini-4:search": "gemini-4-argon-search"
+      "gemini-4-search": "gemini-4-argon-search"
+      "gemini-3.8": "gemini-3.8-flash"
+      "gemini-2.5-flash": "gemini-3.8-flash"
+      "gemini-3.8-flash:search": "gemini-3.8-flash-search"
+      "kimi": "kimi-k3"
+      "glm": "glm-5.3"
+      "hunyuan3": "hy3"
+      "luna": "gpt-5.6-luna"
+      "gpt-5.6-luna-a6": "gpt-5.6-luna"
+
+---
+# --- 第二道防线: finops-audit ---
 apiVersion: extensions.higress.io/v1alpha1
 kind: WasmPlugin
 metadata:
