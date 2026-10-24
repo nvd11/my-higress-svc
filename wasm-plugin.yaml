@@ -17,7 +17,7 @@ metadata:
     app.kubernetes.io/part-of: my-higress-svc
 spec:
   priority: 900
-  failStrategy: FAIL_OPEN # P3a-1 初次上线观察期，观察10分钟无误后切为 FAIL_CLOSE
+  failStrategy: FAIL_CLOSE
   imagePullPolicy: Always
   matchRules:
     - ingress:
