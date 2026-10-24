@@ -20,6 +20,7 @@ const (
 	ctxPromptBody     = "prompt_body"
 	ctxResponseBody   = "response_body"
 	ctxProvider       = "provider"
+	ctxStatusCode     = "status_code"
 )
 
 func main() {}
@@ -135,7 +136,41 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 	return types.ActionContinue
 }
 
+// parseStatusCode parses HTTP status string into int, defaulting to 200
+func parseStatusCode(statusStr string) int {
+	if statusStr == "" {
+		return 200
+	}
+	if code, err := strconv.Atoi(statusStr); err == nil && code > 0 {
+		return code
+	}
+	return 200
+}
+
+// extractErrorMsg parses error message from response body when statusCode >= 400
+func extractErrorMsg(statusCode int, fullResponse string) *string {
+	if statusCode < 400 || fullResponse == "" {
+		return nil
+	}
+	errMsg := fullResponse
+	if gjson.Valid(fullResponse) {
+		if msg := gjson.Get(fullResponse, "error.message").String(); msg != "" {
+			errMsg = msg
+		} else if msg := gjson.Get(fullResponse, "message").String(); msg != "" {
+			errMsg = msg
+		}
+	}
+	if len(errMsg) > 1024 {
+		errMsg = errMsg[:1024]
+	}
+	return &errMsg
+}
+
 func onHttpResponseHeaders(ctx wrapper.HttpContext, config PluginConfig) types.Action {
+	statusStr, _ := proxywasm.GetHttpResponseHeader(":status")
+	statusCode := parseStatusCode(statusStr)
+	ctx.SetContext(ctxStatusCode, statusCode)
+
 	provider, _ := proxywasm.GetHttpResponseHeader("x-envoy-upstream-service-time")
 	if provider != "" {
 		ctx.SetContext(ctxProvider, "google-gemini")
@@ -171,6 +206,11 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config PluginConfig, c
 
 		var promptTokens, completionTokens, reasoningTokens, cacheReadTokens, totalTokens int
 		statusCode := 200
+		if sc, ok := ctx.GetContext(ctxStatusCode).(int); ok && sc > 0 {
+			statusCode = sc
+		}
+
+		errorMsg := extractErrorMsg(statusCode, fullResponse)
 
 		if strings.Contains(fullResponse, "usage") {
 			rawJSON := fullResponse
@@ -229,6 +269,7 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config PluginConfig, c
 			FxRate:                 config.DefaultFxRate,
 			LatencyMS:              latency,
 			StatusCode:             statusCode,
+			ErrorMsg:               errorMsg,
 			Prompt:                 prompt,
 			Response:               fullResponse,
 		}
