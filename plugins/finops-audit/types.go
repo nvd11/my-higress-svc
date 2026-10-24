@@ -43,7 +43,7 @@ type AuditLogRecord struct {
 	Response string `json:"response,omitempty"`
 }
 
-// CalculateCost 封装调用核心纯算费逻辑
-func CalculateCost(model string, promptTokens, completionTokens, reasoningTokens int, fxRate float64) (costUSD float64, costCNY float64) {
-	return finops.CalculateCost(model, promptTokens, completionTokens, reasoningTokens, fxRate)
+// CalculateCost 封装调用核心纯算费逻辑 (价目来自 config.yaml, 未纳管模型无兜底)
+func CalculateCost(model string, promptTokens, completionTokens, cacheReadTokens int, fxRate float64) (costUSD float64, costCNY float64, declared bool) {
+	return finops.CalculateCost(model, promptTokens, completionTokens, cacheReadTokens, fxRate)
 }

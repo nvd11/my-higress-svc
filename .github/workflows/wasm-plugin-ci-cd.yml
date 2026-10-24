@@ -6,11 +6,13 @@ on:
     paths:
       - "plugins/finops-audit/**"
       - "wasm-plugin.yaml"
+      - "config.yaml"
       - ".github/workflows/wasm-plugin-ci-cd.yml"
   pull_request:
     branches: [ main ]
     paths:
       - "plugins/finops-audit/**"
+      - "config.yaml"
   workflow_dispatch:
 
 concurrency:
@@ -31,10 +33,22 @@ jobs:
           go-version: '1.24'
           cache-dependency-path: plugins/finops-audit/go.sum
 
+      - name: Regenerate Pricing Table from config.yaml
+        run: |
+          cd plugins/finops-audit
+          CGO_ENABLED=0 go run internal/pricinggen/main.go -config ../../config.yaml -out pkg/finops/pricing_gen.go
+
+      - name: Verify Generated Pricing Is In Sync With config.yaml
+        run: |
+          if ! git diff --exit-code plugins/finops-audit/pkg/finops/pricing_gen.go; then
+            echo "::error::pkg/finops/pricing_gen.go 与 config.yaml 漂移。请在 plugins/finops-audit 下运行: go run internal/pricinggen/main.go"
+            exit 1
+          fi
+
       - name: Execute FinOps Core Unit Tests
         run: |
           cd plugins/finops-audit
-          CGO_ENABLED=0 go test -v ./pkg/finops
+          CGO_ENABLED=0 go test -v ./pkg/finops ./internal/chargeconfig
 
   build-and-deploy:
     name: Build, Publish & GitOps Deploy Wasm Plugin
@@ -58,6 +72,7 @@ jobs:
       - name: Compile Native Wasm Binary via Go 1.24 wasip1
         run: |
           cd plugins/finops-audit
+          CGO_ENABLED=0 go run internal/pricinggen/main.go -config ../../config.yaml -out pkg/finops/pricing_gen.go
           CGO_ENABLED=0 GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o plugin.wasm .
           echo "Wasm binary compiled successfully: $(ls -lh plugin.wasm | awk '{print $5}')"
 

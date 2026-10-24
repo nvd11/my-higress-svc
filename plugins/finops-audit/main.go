@@ -196,14 +196,16 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config PluginConfig, c
 			}
 		}
 
-		costUSD, costCNY := finops.CalculateCost(modelRequested, promptTokens, completionTokens, reasoningTokens, config.DefaultFxRate)
-		pricing := finops.GetModelPricing(modelRequested)
+		// 价目与渠道元数据全部来自 config.yaml (构建期生成), 未声明的模型不做价格兜底
+		pricing, declared := finops.GetModelPricing(modelRequested)
+		costUSD, costCNY, _ := finops.CalculateCost(modelRequested, promptTokens, completionTokens, cacheReadTokens, config.DefaultFxRate)
 
-		provider := "a6api"
-		providerKeyAlias := "A6_API_KEY"
-		if strings.HasPrefix(modelRequested, "gemini") {
-			provider = "google-gemini"
-			providerKeyAlias = "OPENAI_API_KEY_FREE_3"
+		provider, providerKeyAlias := "unknown", "unknown"
+		modelUsed := modelRequested
+		if declared {
+			provider = pricing.Provider
+			providerKeyAlias = pricing.ProviderKey
+			modelUsed = pricing.UpstreamModel
 		}
 
 		// 行主键由 Dashboard-API 依据 (request_id, created_at) 派生, 插件不再生成随机 ID
@@ -211,7 +213,7 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config PluginConfig, c
 			RequestID:              reqID,
 			APIKeyAlias:            apiKeyAlias,
 			ModelRequested:         modelRequested,
-			ModelUsed:              modelRequested,
+			ModelUsed:              modelUsed,
 			Provider:               provider,
 			ProviderKeyAlias:       providerKeyAlias,
 			PromptTokens:           promptTokens,
@@ -220,7 +222,7 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config PluginConfig, c
 			CacheReadTokens:        cacheReadTokens,
 			TotalTokens:            totalTokens,
 			PromptUnitPriceUSD:     pricing.PromptPer1M,
-			CacheUnitPriceUSD:      pricing.PromptPer1M,
+			CacheUnitPriceUSD:      pricing.CacheReadPer1M,
 			CompletionUnitPriceUSD: pricing.CompletionPer1M,
 			CostUSD:                costUSD,
 			CostCNY:                costCNY,
