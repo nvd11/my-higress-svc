@@ -3,6 +3,7 @@ package redis
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -70,5 +71,70 @@ func TestRedisPayloadCompressionConsistency(t *testing.T) {
 	pMap, ok := restored["prompt"].(map[string]interface{})
 	if !ok || len(pMap) == 0 {
 		t.Errorf("restored prompt invalid: %v", restored["prompt"])
+	}
+}
+
+// 验证 EncodeBlob / DecodeBlob 的往返一致性、Gzip 前缀与历史明文兼容
+func TestEncodeDecodeBlob(t *testing.T) {
+	orig := []byte(`{"record":{"request_id":"abc","prompt":"温州一家人"}}`)
+
+	encoded := EncodeBlob(orig)
+	if !strings.HasPrefix(encoded, "H4sI") {
+		t.Errorf("expected gzip base64 prefix H4sI, got: %.10s", encoded)
+	}
+	if restored := DecodeBlob(encoded); string(restored) != string(orig) {
+		t.Errorf("roundtrip mismatch: %s", restored)
+	}
+
+	// 历史明文 JSON 必须原样还原
+	plain := `{"prompt":{"user_prompt":"hi"}}`
+	if restored := DecodeBlob(plain); string(restored) != plain {
+		t.Errorf("plaintext compat broken: %s", restored)
+	}
+
+	// 空串 / 非法 base64 不得 panic
+	if got := DecodeBlob(""); got != nil {
+		t.Errorf("expected nil for empty input, got %v", got)
+	}
+	if got := DecodeBlob("H4sI-not-valid-base64!!!"); got != nil {
+		t.Errorf("expected nil for corrupt blob, got %v", got)
+	}
+}
+
+// WAL 助手在 Redis 未初始化时必须全程 no-op（保证单测与降级启动不炸）
+func TestWALHelpersNilClientSafe(t *testing.T) {
+	Client = nil
+	ctx := context.Background()
+
+	if err := SetWAL(ctx, "req-1", []byte(`{}`)); err != nil {
+		t.Errorf("SetWAL should be no-op, got: %v", err)
+	}
+	if _, found := GetWAL(ctx, "req-1"); found {
+		t.Errorf("GetWAL should report not found")
+	}
+	if err := DelWAL(ctx, "req-1"); err != nil {
+		t.Errorf("DelWAL should be no-op, got: %v", err)
+	}
+	if err := MoveWALToDead(ctx, "req-1", []byte(`{}`)); err != nil {
+		t.Errorf("MoveWALToDead should be no-op, got: %v", err)
+	}
+	keys, err := ListWALKeys(ctx, 10)
+	if err != nil || len(keys) != 0 {
+		t.Errorf("ListWALKeys should be empty, got %v err=%v", keys, err)
+	}
+
+	// 空 requestID 同样不得写入非法 key
+	if err := SetWAL(ctx, "", []byte(`{}`)); err != nil {
+		t.Errorf("SetWAL empty id should be no-op, got: %v", err)
+	}
+}
+
+// WAL key 前缀必须与热缓存前缀隔离，避免互相踩踏
+func TestWALKeyPrefixIsolation(t *testing.T) {
+	if WALPrefix == "litellm:payload:" || WALDeadPrefix == WALPrefix {
+		t.Fatalf("WAL prefix collides with payload cache or dead prefix")
+	}
+	if !strings.HasPrefix(WALPrefix+"abc", "audit:wip:") {
+		t.Errorf("unexpected WAL prefix: %s", WALPrefix)
 	}
 }
