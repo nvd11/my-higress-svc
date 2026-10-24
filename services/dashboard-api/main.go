@@ -41,6 +41,10 @@ func main() {
 	vlogsClient := vlogs.NewClient(cfg)
 	log.Printf("✅ VictoriaLogs Client ready (%s)", cfg.VictoriaLogsURL)
 
+	// 3.5 启动 WAL 重放守护: 补偿因进程重启/驱逐而中断的审计落盘
+	replayCtx, replayCancel := context.WithCancel(context.Background())
+	go api.StartWALReplay(replayCtx, vlogsClient, 60*time.Second, 200)
+
 	// 4. 创建 Gin Engine
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
@@ -94,5 +98,6 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Fatal("Server forced to shutdown:", err)
 	}
+	replayCancel()
 	log.Println("👋 Server exited.")
 }
