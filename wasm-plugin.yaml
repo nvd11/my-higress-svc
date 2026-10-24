@@ -16,7 +16,7 @@ spec:
   matchRules:
     - ingress:
         - higress-system/higress-ai-ingress
-  url: oci://ghcr.io/nvd11/higress-finops-audit:3cbc352ec33fabafc63f503bce70969457f3e891
+  url: oci://ghcr.io/nvd11/higress-finops-audit:d0d89e40a98b57169813315473d87c84810dcbac
   defaultConfig:
     dashboard_api_url: "http://higress-dashboard-backend.higress-system.svc.cluster.local:4000/api/v1/internal/audit-log"
     default_fx_rate: 7.2300
