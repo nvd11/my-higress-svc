@@ -18,7 +18,6 @@ import (
 
 func testRecord() WasmAuditRecordInput {
 	return WasmAuditRecordInput{
-		ID:             "wal-test-id",
 		RequestID:      "wal-test-req",
 		APIKeyAlias:    "cindy",
 		ModelRequested: "deepseek-v4-pro-0813",
