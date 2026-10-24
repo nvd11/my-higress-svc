@@ -63,6 +63,11 @@ func RegisterPayloadRoutes(rg *gin.RouterGroup, vlogsClient *vlogs.Client) {
 			responseData = map[string]interface{}{}
 		}
 
+		// 3.5 读侧幂等整形: 裸 OpenAI/Anthropic 报文 → 补齐 system_prompt / user_prompt / messages,
+		//     裸 SSE 流式响应 → 聚合出干净的 reply / reasoning_content / tool_calls。
+		//     adapter 时代已整形过的历史数据原样透出，不做改写。
+		promptData, responseData = logic.NormalizePayload(promptData, responseData)
+
 		// 4. 安全抽样截断处理: 除非明确指定 full=true, 否则执行递归 Base64 折叠与超长安全截断
 		finalPrompt := interface{}(promptData)
 		finalResponse := interface{}(responseData)
