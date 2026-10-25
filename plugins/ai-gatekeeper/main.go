@@ -291,8 +291,14 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 		}
 	}
 
-	// 注入原始模型名头 (方便下游审计与追踪)
+	// 注入原始模型名头与上游路由提供商头 (供 Envoy Ingress 路由及财务审计追踪)
+	provider := defaultModelProviders[resolvedModel]
+	if provider == "" {
+		provider = "a6api"
+	}
 	_ = proxywasm.ReplaceHttpRequestHeader("x-original-model", model)
+	_ = proxywasm.ReplaceHttpRequestHeader("x-higress-llm-model", resolvedModel)
+	_ = proxywasm.ReplaceHttpRequestHeader("x-higress-llm-provider", provider)
 	ctx.SetContext(ctxOriginalModel, model)
 	ctx.SetContext(ctxModelRequested, resolvedModel)
 

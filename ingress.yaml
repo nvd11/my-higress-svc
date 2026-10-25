@@ -1,5 +1,37 @@
 # ==============================================================================
-# Higress Ingress 业务入口绑定配置 (原生 Envoy 直通 A6 API)
+# Higress Ingress 业务入口多上游分发配置 (以 config.yaml 为唯一标准)
+# 由 internal/pricinggen 自动生成自 config.yaml (sha256:f8b53b6c0a1b); 严禁手改
+# ==============================================================================
+# 1. 🟢 自建 Google Antigravity Proxy 路由 (Gemini 系列)
+# ==============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: higress-ai-ingress-antigravity
+  namespace: higress-system
+  labels:
+    app.kubernetes.io/name: higress-ai-gateway
+    app.kubernetes.io/part-of: my-higress-svc
+  annotations:
+    higress.io/backend-protocol: HTTP
+    higress.io/destination: antigravity-proxy.dns:3000
+    higress.io/upstream-vhost: openai-proxy-for-antigravity.llm-system.svc.cluster.local
+    higress.io/exact-match-header-x-higress-llm-provider: openai-proxy-for-antigravity
+spec:
+  ingressClassName: higress
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              resource:
+                apiGroup: networking.higress.io
+                kind: McpBridge
+                name: default
+---
+# ==============================================================================
+# 2. 🛡️ A6 API 商业渠道路由 (DeepSeek / Kimi / GLM / hy3 / Luna 默认及指定兜底)
 # ==============================================================================
 apiVersion: networking.k8s.io/v1
 kind: Ingress

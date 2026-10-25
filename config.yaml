@@ -5,14 +5,14 @@
 # ==============================================================================
 
 model_list:
-  # 🟢 Google Gemini 原生直连系列 (Google 官方 Standard Paid Tier 定价: $0.75 Input / $3.75 Output / $0.075 Cache Read)
+  # 🟢 Google Gemini 原生直连系列 (由自建 openai-proxy-for-antigravity 直通 Google AI Pro)
   - model_name: "gemini-3.8-flash"
     aliases:
       - "gemini-3.8"
       - "gemini-2.5-flash"
-    provider: "google-gemini"
-    protocol: "gemini-native"
-    upstream_url: "https://generativelanguage.googleapis.com"
+    provider: "openai-proxy-for-antigravity"
+    protocol: "openai"
+    upstream_url: "http://openai-proxy-for-antigravity.llm-system.svc.cluster.local:3000/v1"
     api_key: "os.environ/OPENAI_API_KEY_FREE_3"
     pricing:
       prompt_per_1m: 0.750

@@ -16,19 +16,18 @@ metadata:
     app.kubernetes.io/name: higress-ai-gateway
     app.kubernetes.io/part-of: my-higress-svc
 spec:
+  phase: AUTHN
   priority: 900
   failStrategy: FAIL_CLOSE
   imagePullPolicy: Always
-  matchRules:
-    - ingress:
-        - higress-system/higress-ai-ingress
   url: oci://ghcr.io/nvd11/higress-ai-gatekeeper:4f2550328f28d746fdc93d52d7150ebf0cda3738
   defaultConfig:
     dashboard_api_url: "http://higress-dashboard-backend.higress-system.svc.cluster.local:4000/api/v1/internal/audit-log"
     virtual_keys:
       "sk-cindy-higress-20261003-888888": "cindy"
       "sk-yui-higress-20261003-777777": "yui"
-      "sk-hebe-higress-20261003-999999": "hebe"
+      "sk-hebe-higress-20261003-999999": "justin-higress"
+      "sk-hebe-higress-20261026-cfd8eece": "hebe-higress"
       "sk-aurora-higress-20261011-888888": "aurora"
       "sk-celia-higress-20261011-888888": "celia"
       "sk-claire-higress-20261011-888888": "claire"
@@ -40,7 +39,6 @@ spec:
       "sk-jayden-production-key": "jayden"
       "sk-yui-40b9abf5a3612e48aa25111afbc4f813": "yui-agent"
       "sk-rin-8f1d3c92e104b47a952a123456789abc": "rin-agent"
-      "sk-justin-v2-k9m4x7q2p8w5": "justin"
 
 ---
 # --- 第二道防线: finops-audit ---
@@ -56,9 +54,6 @@ spec:
   priority: 90
   failStrategy: FAIL_OPEN
   imagePullPolicy: Always
-  matchRules:
-    - ingress:
-        - higress-system/higress-ai-ingress
   url: oci://ghcr.io/nvd11/higress-finops-audit:4f2550328f28d746fdc93d52d7150ebf0cda3738
   defaultConfig:
     dashboard_api_url: "http://higress-dashboard-backend.higress-system.svc.cluster.local:4000/api/v1/internal/audit-log"
@@ -66,7 +61,8 @@ spec:
     virtual_keys:
       "sk-cindy-higress-20261003-888888": "cindy"
       "sk-yui-higress-20261003-777777": "yui"
-      "sk-hebe-higress-20261003-999999": "hebe"
+      "sk-hebe-higress-20261003-999999": "justin-higress"
+      "sk-hebe-higress-20261026-cfd8eece": "hebe-higress"
       "sk-aurora-higress-20261011-888888": "aurora"
       "sk-celia-higress-20261011-888888": "celia"
       "sk-claire-higress-20261011-888888": "claire"
@@ -78,4 +74,3 @@ spec:
       "sk-jayden-production-key": "jayden"
       "sk-yui-40b9abf5a3612e48aa25111afbc4f813": "yui-agent"
       "sk-rin-8f1d3c92e104b47a952a123456789abc": "rin-agent"
-      "sk-justin-v2-k9m4x7q2p8w5": "justin"
