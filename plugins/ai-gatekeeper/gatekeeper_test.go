@@ -222,3 +222,15 @@ func TestParseConfigDefaults(t *testing.T) {
 		t.Errorf("expected 0 virtual keys, got %d", len(cfg.VirtualKeys))
 	}
 }
+
+func TestModelProvidersMapping(t *testing.T) {
+	if defaultModelProviders["gemini-3.8-flash"] != "openai-proxy-for-antigravity" {
+		t.Errorf("gemini-3.8-flash provider = %q, want openai-proxy-for-antigravity", defaultModelProviders["gemini-3.8-flash"])
+	}
+	nonGemini := []string{"kimi-k3", "glm-5.3", "hy3", "gpt-5.6-luna", "deepseek-v4-pro-0813"}
+	for _, m := range nonGemini {
+		if defaultModelProviders[m] != "a6api" {
+			t.Errorf("model %s provider = %q, want a6api", m, defaultModelProviders[m])
+		}
+	}
+}

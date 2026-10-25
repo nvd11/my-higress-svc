@@ -28,6 +28,7 @@ type Model struct {
 	Aliases       []string
 	Provider      string
 	Protocol      string
+	UpstreamURL   string
 	UpstreamModel string
 	APIKey        string // 原始字面量, 例如 os.environ/A6_API_KEY
 	Pricing       Pricing
@@ -230,6 +231,8 @@ func assignScalar(m *Model, key, val string, lineNo int) error {
 		m.Provider = v
 	case "protocol":
 		m.Protocol = v
+	case "upstream_url":
+		m.UpstreamURL = v
 	case "upstream_model":
 		m.UpstreamModel = v
 	case "api_key":

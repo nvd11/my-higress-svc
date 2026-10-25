@@ -31,6 +31,8 @@ func main() {
 		configPath        = flag.String("config", "../../config.yaml", "config.yaml 路径")
 		outPath           = flag.String("out", "pkg/finops/pricing_gen.go", "生成文件路径 (为空则跳过)")
 		gatekeeperOutPath = flag.String("gatekeeper-out", "../ai-gatekeeper/models_gen.go", "可选: ai-gatekeeper models_gen.go 生成路径")
+		mcpbridgeOutPath  = flag.String("mcpbridge-out", "", "可选: mcp-bridge.yaml 生成路径")
+		ingressOutPath    = flag.String("ingress-out", "", "可选: ingress.yaml 生成路径")
 	)
 	flag.Parse()
 
@@ -108,6 +110,17 @@ func main() {
 				fmt.Fprintf(&gb, "\t%s: %s,\n", quote(alias), quote(m.Name))
 			}
 		}
+		gb.WriteString("}\n\n")
+
+		gb.WriteString("// defaultModelProviders 由 config.yaml 自动导出的模型 -> 提供商映射 (用于 Envoy 动态路由)\n")
+		gb.WriteString("var defaultModelProviders = map[string]string{\n")
+		for _, m := range models {
+			provider := m.Provider
+			if provider == "" {
+				provider = "a6api"
+			}
+			fmt.Fprintf(&gb, "\t%s: %s,\n", quote(m.Name), quote(provider))
+		}
 		gb.WriteString("}\n")
 
 		gsrc, err := format.Source([]byte(gb.String()))
@@ -125,6 +138,139 @@ func main() {
 				*gatekeeperOutPath, len(models), countAliases(models), fmt.Sprintf("%x", sum)[:12])
 		}
 	}
+
+	sumHex := fmt.Sprintf("%x", sum)[:12]
+
+	if *mcpbridgeOutPath != "" {
+		mcpYaml := generateMcpBridge(sumHex)
+		if prev, err := os.ReadFile(*mcpbridgeOutPath); err == nil && string(prev) == mcpYaml {
+			fmt.Printf("%s 已是最新 (config.yaml sha256:%s), 未改动\n", *mcpbridgeOutPath, sumHex)
+		} else {
+			if err := os.WriteFile(*mcpbridgeOutPath, []byte(mcpYaml), 0o644); err != nil {
+				log.Fatalf("写入 %s 失败: %v", *mcpbridgeOutPath, err)
+			}
+			fmt.Printf("已生成 %s (config.yaml sha256:%s)\n", *mcpbridgeOutPath, sumHex)
+		}
+	}
+
+	if *ingressOutPath != "" {
+		ingressYaml := generateIngress(sumHex)
+		if prev, err := os.ReadFile(*ingressOutPath); err == nil && string(prev) == ingressYaml {
+			fmt.Printf("%s 已是最新 (config.yaml sha256:%s), 未改动\n", *ingressOutPath, sumHex)
+		} else {
+			if err := os.WriteFile(*ingressOutPath, []byte(ingressYaml), 0o644); err != nil {
+				log.Fatalf("写入 %s 失败: %v", *ingressOutPath, err)
+			}
+			fmt.Printf("已生成 %s (config.yaml sha256:%s)\n", *ingressOutPath, sumHex)
+		}
+	}
+}
+
+func generateMcpBridge(sumHash string) string {
+	return fmt.Sprintf(`# ==============================================================================
+# Higress McpBridge 服务注册配置 (为外部大模型 API 提供动态 DNS 解析与连接池)
+# 由 internal/pricinggen 自动生成自 config.yaml (sha256:%s); 严禁手改
+# ==============================================================================
+apiVersion: networking.higress.io/v1
+kind: McpBridge
+metadata:
+  name: default
+  namespace: higress-system
+  labels:
+    app.kubernetes.io/name: higress-ai-gateway
+    app.kubernetes.io/part-of: my-higress-svc
+spec:
+  registries:
+    # 🟢 Google Antigravity Proxy 渠道 (直通 Google AI Pro)
+    - name: antigravity-proxy
+      type: dns
+      domain: openai-proxy-for-antigravity.llm-system.svc.cluster.local
+      port: 3000
+
+    # 🛡️ A6 API 中转渠道
+    - name: a6api
+      type: dns
+      domain: api.a6api.com
+      port: 443
+
+    # 🌕 元衡 API 渠道
+    - name: yuanheng
+      type: dns
+      domain: cn.meta-api.vip
+      port: 443
+
+    # 📊 Dashboard 审计入库与透视后端 (提供 Envoy Wasm 插件异步上报通道)
+    - name: dashboard-backend
+      type: dns
+      domain: higress-dashboard-backend.higress-system.svc.cluster.local
+      port: 4000
+`, sumHash)
+}
+
+func generateIngress(sumHash string) string {
+	return fmt.Sprintf(`# ==============================================================================
+# Higress Ingress 业务入口多上游分发配置 (以 config.yaml 为唯一标准)
+# 由 internal/pricinggen 自动生成自 config.yaml (sha256:%s); 严禁手改
+# ==============================================================================
+# 1. 🟢 自建 Google Antigravity Proxy 路由 (Gemini 系列)
+# ==============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: higress-ai-ingress-antigravity
+  namespace: higress-system
+  labels:
+    app.kubernetes.io/name: higress-ai-gateway
+    app.kubernetes.io/part-of: my-higress-svc
+  annotations:
+    higress.io/backend-protocol: HTTP
+    higress.io/destination: antigravity-proxy.dns:3000
+    higress.io/upstream-vhost: openai-proxy-for-antigravity.llm-system.svc.cluster.local
+    higress.io/exact-match-header-x-higress-llm-provider: openai-proxy-for-antigravity
+spec:
+  ingressClassName: higress
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              resource:
+                apiGroup: networking.higress.io
+                kind: McpBridge
+                name: default
+---
+# ==============================================================================
+# 2. 🛡️ A6 API 商业渠道路由 (DeepSeek / Kimi / GLM / hy3 / Luna 默认及指定兜底)
+# ==============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: higress-ai-ingress
+  namespace: higress-system
+  labels:
+    app.kubernetes.io/name: higress-ai-gateway
+    app.kubernetes.io/part-of: my-higress-svc
+  annotations:
+    higress.io/backend-protocol: HTTPS
+    higress.io/destination: a6api.dns
+    higress.io/upstream-vhost: api.a6api.com
+    # 🎯 授权头由集群运行时注入真实 Key，由 ArgoCD ignoreDifferences 纳管避免泄露
+    higress.io/request-header-control-update: |
+      Authorization Bearer A6_API_KEY_PLACEHOLDER
+spec:
+  ingressClassName: higress
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              resource:
+                apiGroup: networking.higress.io
+                kind: McpBridge
+                name: default
+`, sumHash)
 }
 
 func num(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
