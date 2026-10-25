@@ -38,13 +38,6 @@ jobs:
           cd plugins/finops-audit
           CGO_ENABLED=0 go run internal/pricinggen/main.go -config ../../config.yaml -out pkg/finops/pricing_gen.go -gatekeeper-out ../ai-gatekeeper/models_gen.go
 
-      - name: Verify Generated Artifacts In Sync (G8 Fingerprint Lock)
-        run: |
-          if ! git diff --exit-code plugins/finops-audit/pkg/finops/pricing_gen.go plugins/ai-gatekeeper/models_gen.go; then
-            echo "::error::pricing_gen.go 或 models_gen.go 与 config.yaml 产生漂移！请运行: go run internal/pricinggen/main.go"
-            exit 1
-          fi
-
       - name: Validate WasmPlugin Specifications & VirtualKeys Consistency
         run: |
           python3 -c "
@@ -184,7 +177,7 @@ jobs:
             ghcr.io/nvd11/higress-ai-gatekeeper:latest
             ghcr.io/nvd11/higress-ai-gatekeeper:${{ github.sha }}
 
-      - name: GitOps Write-Back (Update wasm-plugin.yaml)
+      - name: GitOps Write-Back (Update wasm-plugin.yaml & Generated Go Code)
         if: github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
@@ -192,14 +185,16 @@ jobs:
           sed -i -E "s|url: oci://ghcr.io/nvd11/higress-finops-audit:.*|url: oci://ghcr.io/nvd11/higress-finops-audit:${{ github.sha }}|g" wasm-plugin.yaml
           sed -i -E "s|url: oci://ghcr.io/nvd11/higress-ai-gatekeeper:.*|url: oci://ghcr.io/nvd11/higress-ai-gatekeeper:${{ github.sha }}|g" wasm-plugin.yaml
 
-          if ! git diff --quiet wasm-plugin.yaml; then
-            echo "Changes detected in wasm-plugin.yaml, committing..."
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add wasm-plugin.yaml
-            git commit -m "chore(gitops): bump wasm plugin images to ${{ github.sha }} [skip ci]"
+          # Track wasm-plugin.yaml and freshly generated Go models/pricing
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add wasm-plugin.yaml plugins/finops-audit/pkg/finops/pricing_gen.go plugins/ai-gatekeeper/models_gen.go
+
+          if ! git diff --cached --quiet; then
+            echo "Changes detected in wasm-plugin.yaml or generated Go code, committing..."
+            git commit -m "chore(gitops): sync generated models and bump wasm images to ${{ github.sha }} [skip ci]"
             git push origin main
-            echo "✅ Successfully updated wasm-plugin.yaml with SHA ${{ github.sha }}"
+            echo "✅ Successfully synced GitOps repo with SHA ${{ github.sha }}"
           else
-            echo "No change in wasm-plugin.yaml, skipping git push."
+            echo "No change detected, skipping git push."
           fi
