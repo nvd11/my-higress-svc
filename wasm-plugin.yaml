@@ -22,7 +22,7 @@ spec:
   matchRules:
     - ingress:
         - higress-system/higress-ai-ingress
-  url: oci://ghcr.io/nvd11/higress-ai-gatekeeper:478fd795dcb509fe9f164b4bf3b894160de5fce6
+  url: oci://ghcr.io/nvd11/higress-ai-gatekeeper:4f2550328f28d746fdc93d52d7150ebf0cda3738
   defaultConfig:
     dashboard_api_url: "http://higress-dashboard-backend.higress-system.svc.cluster.local:4000/api/v1/internal/audit-log"
     virtual_keys:
@@ -59,7 +59,7 @@ spec:
   matchRules:
     - ingress:
         - higress-system/higress-ai-ingress
-  url: oci://ghcr.io/nvd11/higress-finops-audit:478fd795dcb509fe9f164b4bf3b894160de5fce6
+  url: oci://ghcr.io/nvd11/higress-finops-audit:4f2550328f28d746fdc93d52d7150ebf0cda3738
   defaultConfig:
     dashboard_api_url: "http://higress-dashboard-backend.higress-system.svc.cluster.local:4000/api/v1/internal/audit-log"
     default_fx_rate: 7.2300
