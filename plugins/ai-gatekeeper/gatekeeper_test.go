@@ -205,14 +205,14 @@ func TestParseConfigDefaults(t *testing.T) {
 		t.Fatalf("parseConfig failed: %v", err)
 	}
 
-	// Should fallback to default 8 canonical models
-	if len(cfg.CanonicalModels) != 8 {
-		t.Errorf("expected 8 default canonical models, got %d", len(cfg.CanonicalModels))
+	// Should fallback to default canonical models
+	if len(cfg.CanonicalModels) != len(defaultCanonicalModels) {
+		t.Errorf("expected %d default canonical models, got %d", len(defaultCanonicalModels), len(cfg.CanonicalModels))
 	}
 
-	// Should fallback to default 9 aliases
-	if len(cfg.Aliases) != 9 {
-		t.Errorf("expected 9 default aliases, got %d", len(cfg.Aliases))
+	// Should fallback to default aliases
+	if len(cfg.Aliases) != len(defaultAliases) {
+		t.Errorf("expected %d default aliases, got %d", len(defaultAliases), len(cfg.Aliases))
 	}
 
 	// Virtual keys should be empty
