@@ -212,7 +212,35 @@ func generateIngress(sumHash string) string {
 # Higress Ingress 业务入口多上游分发配置 (以 config.yaml 为唯一标准)
 # 由 internal/pricinggen 自动生成自 config.yaml (sha256:%s); 严禁手改
 # ==============================================================================
-# 1. 🟢 自建 Google Antigravity Proxy 路由 (Gemini 系列)
+# 1. 🟢 默认 AI 业务入口 (直连自建 openai-proxy-for-antigravity，调度 Google AI Pro 与外部模型)
+# ==============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: higress-ai-ingress
+  namespace: higress-system
+  labels:
+    app.kubernetes.io/name: higress-ai-gateway
+    app.kubernetes.io/part-of: my-higress-svc
+  annotations:
+    higress.io/backend-protocol: HTTP
+    higress.io/destination: antigravity-proxy.dns:3000
+    higress.io/upstream-vhost: openai-proxy-for-antigravity.llm-system.svc.cluster.local
+spec:
+  ingressClassName: higress
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              resource:
+                apiGroup: networking.higress.io
+                kind: McpBridge
+                name: default
+---
+# ==============================================================================
+# 2. 🟢 自建 Google Antigravity Proxy 显式路由
 # ==============================================================================
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -241,12 +269,12 @@ spec:
                 name: default
 ---
 # ==============================================================================
-# 2. 🛡️ A6 API 商业渠道路由 (DeepSeek / Kimi / GLM / hy3 / Luna 默认及指定兜底)
+# 3. 🛡️ A6 API 商业渠道显式路由 (支持指定 x-higress-llm-provider: a6api 显式直连)
 # ==============================================================================
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: higress-ai-ingress
+  name: higress-ai-ingress-a6api
   namespace: higress-system
   labels:
     app.kubernetes.io/name: higress-ai-gateway
@@ -255,6 +283,7 @@ metadata:
     higress.io/backend-protocol: HTTPS
     higress.io/destination: a6api.dns
     higress.io/upstream-vhost: api.a6api.com
+    higress.io/exact-match-header-x-higress-llm-provider: a6api
     # 🎯 授权头由集群运行时注入真实 Key，由 ArgoCD ignoreDifferences 纳管避免泄露
     higress.io/request-header-control-update: |
       Authorization Bearer A6_API_KEY_PLACEHOLDER
