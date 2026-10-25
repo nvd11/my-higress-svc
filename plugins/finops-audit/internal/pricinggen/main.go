@@ -30,7 +30,7 @@ func main() {
 	var (
 		configPath        = flag.String("config", "../../config.yaml", "config.yaml 路径")
 		outPath           = flag.String("out", "pkg/finops/pricing_gen.go", "生成文件路径 (为空则跳过)")
-		gatekeeperOutPath = flag.String("gatekeeper-out", "", "可选: ai-gatekeeper models_gen.go 生成路径")
+		gatekeeperOutPath = flag.String("gatekeeper-out", "../ai-gatekeeper/models_gen.go", "可选: ai-gatekeeper models_gen.go 生成路径")
 	)
 	flag.Parse()
 

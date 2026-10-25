@@ -92,24 +92,21 @@ func TestValidateAndResolveModel(t *testing.T) {
 		})
 	}
 
-	// 2. Verify all 12 aliases resolve correctly
+	// 2. Verify all 9 aliases resolve correctly
 	aliasExpectations := map[string]string{
-		"gemini-4":                "gemini-4-argon",
-		"gemini-4-flash":          "gemini-4-argon",
-		"gemini-4:search":         "gemini-4-argon-search",
-		"gemini-4-search":         "gemini-4-argon-search",
-		"gemini-3.8":              "gemini-3.8-flash",
-		"gemini-2.5-flash":        "gemini-3.8-flash",
-		"gemini-3.8-flash:search": "gemini-3.8-flash-search",
-		"kimi":                    "kimi-k3",
-		"glm":                     "glm-5.3",
-		"hunyuan3":                "hy3",
-		"luna":                    "gpt-5.6-luna",
-		"gpt-5.6-luna-a6":         "gpt-5.6-luna",
+		"gemini-4":         "gemini-4-argon",
+		"gemini-4-flash":   "gemini-4-argon",
+		"gemini-3.8":       "gemini-3.8-flash",
+		"gemini-2.5-flash": "gemini-3.8-flash",
+		"kimi":             "kimi-k3",
+		"glm":              "glm-5.3",
+		"hunyuan3":         "hy3",
+		"luna":             "gpt-5.6-luna",
+		"gpt-5.6-luna-a6":  "gpt-5.6-luna",
 	}
 
-	if len(aliasExpectations) != 12 {
-		t.Fatalf("expected exactly 12 alias test expectations, got %d", len(aliasExpectations))
+	if len(aliasExpectations) != 9 {
+		t.Fatalf("expected exactly 9 alias test expectations, got %d", len(aliasExpectations))
 	}
 
 	for alias, expectedCanonical := range aliasExpectations {
@@ -134,6 +131,10 @@ func TestValidateAndResolveModel(t *testing.T) {
 		"claude-3-5-sonnet",
 		"gemini-3.8-owner",
 		"gemini-3.8-alice",
+		"gemini-4-argon-search",
+		"gemini-4:search",
+		"gemini-3.8-flash-search",
+		"gemini-3.8-flash:search",
 		"llama-3",
 		"",
 	}
@@ -204,14 +205,14 @@ func TestParseConfigDefaults(t *testing.T) {
 		t.Fatalf("parseConfig failed: %v", err)
 	}
 
-	// Should fallback to default 10 canonical models
-	if len(cfg.CanonicalModels) != 10 {
-		t.Errorf("expected 10 default canonical models, got %d", len(cfg.CanonicalModels))
+	// Should fallback to default 8 canonical models
+	if len(cfg.CanonicalModels) != 8 {
+		t.Errorf("expected 8 default canonical models, got %d", len(cfg.CanonicalModels))
 	}
 
-	// Should fallback to default 12 aliases
-	if len(cfg.Aliases) != 12 {
-		t.Errorf("expected 12 default aliases, got %d", len(cfg.Aliases))
+	// Should fallback to default 9 aliases
+	if len(cfg.Aliases) != 9 {
+		t.Errorf("expected 9 default aliases, got %d", len(cfg.Aliases))
 	}
 
 	// Virtual keys should be empty

@@ -41,30 +41,6 @@ spec:
       "sk-yui-40b9abf5a3612e48aa25111afbc4f813": "yui-agent"
       "sk-rin-8f1d3c92e104b47a952a123456789abc": "rin-agent"
       "sk-justin-v2-k9m4x7q2p8w5": "justin"
-    canonical_models:
-      - "gemini-4-argon"
-      - "gemini-4-argon-search"
-      - "gemini-3.8-flash"
-      - "gemini-3.8-flash-search"
-      - "kimi-k3"
-      - "glm-5.3"
-      - "hy3"
-      - "hy4-preview"
-      - "gpt-5.6-luna"
-      - "deepseek-v4-pro-0813"
-    aliases:
-      "gemini-4": "gemini-4-argon"
-      "gemini-4-flash": "gemini-4-argon"
-      "gemini-4:search": "gemini-4-argon-search"
-      "gemini-4-search": "gemini-4-argon-search"
-      "gemini-3.8": "gemini-3.8-flash"
-      "gemini-2.5-flash": "gemini-3.8-flash"
-      "gemini-3.8-flash:search": "gemini-3.8-flash-search"
-      "kimi": "kimi-k3"
-      "glm": "glm-5.3"
-      "hunyuan3": "hy3"
-      "luna": "gpt-5.6-luna"
-      "gpt-5.6-luna-a6": "gpt-5.6-luna"
 
 ---
 # --- 第二道防线: finops-audit ---
