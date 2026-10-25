@@ -92,10 +92,8 @@ func TestValidateAndResolveModel(t *testing.T) {
 		})
 	}
 
-	// 2. Verify all 9 aliases resolve correctly
+	// 2. Verify all 7 aliases resolve correctly
 	aliasExpectations := map[string]string{
-		"gemini-4":         "gemini-4-argon",
-		"gemini-4-flash":   "gemini-4-argon",
 		"gemini-3.8":       "gemini-3.8-flash",
 		"gemini-2.5-flash": "gemini-3.8-flash",
 		"kimi":             "kimi-k3",
@@ -105,8 +103,8 @@ func TestValidateAndResolveModel(t *testing.T) {
 		"gpt-5.6-luna-a6":  "gpt-5.6-luna",
 	}
 
-	if len(aliasExpectations) != 9 {
-		t.Fatalf("expected exactly 9 alias test expectations, got %d", len(aliasExpectations))
+	if len(aliasExpectations) != 7 {
+		t.Fatalf("expected exactly 7 alias test expectations, got %d", len(aliasExpectations))
 	}
 
 	for alias, expectedCanonical := range aliasExpectations {
@@ -131,10 +129,14 @@ func TestValidateAndResolveModel(t *testing.T) {
 		"claude-3-5-sonnet",
 		"gemini-3.8-owner",
 		"gemini-3.8-alice",
+		"gemini-4-argon",
+		"gemini-4",
+		"gemini-4-flash",
 		"gemini-4-argon-search",
 		"gemini-4:search",
 		"gemini-3.8-flash-search",
 		"gemini-3.8-flash:search",
+		"hy4-preview",
 		"llama-3",
 		"",
 	}
