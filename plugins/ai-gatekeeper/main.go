@@ -299,6 +299,8 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 	_ = proxywasm.ReplaceHttpRequestHeader("x-original-model", model)
 	_ = proxywasm.ReplaceHttpRequestHeader("x-higress-llm-model", resolvedModel)
 	_ = proxywasm.ReplaceHttpRequestHeader("x-higress-llm-provider", provider)
+	_, err1 := proxywasm.CallForeignFunction("clear_route_cache", nil)
+	proxywasm.LogWarnf("[ai-gatekeeper] clear_route_cache called, provider: %s, err: %v", provider, err1)
 	ctx.SetContext(ctxOriginalModel, model)
 	ctx.SetContext(ctxModelRequested, resolvedModel)
 
