@@ -1,5 +1,6 @@
 # ==============================================================================
 # Higress McpBridge 服务注册配置 (为外部大模型 API 提供动态 DNS 解析与连接池)
+# 由 internal/pricinggen 自动生成自 config.yaml (sha256:f8b53b6c0a1b); 严禁手改
 # ==============================================================================
 apiVersion: networking.higress.io/v1
 kind: McpBridge
@@ -11,6 +12,12 @@ metadata:
     app.kubernetes.io/part-of: my-higress-svc
 spec:
   registries:
+    # 🟢 Google Antigravity Proxy 渠道 (直通 Google AI Pro)
+    - name: antigravity-proxy
+      type: dns
+      domain: openai-proxy-for-antigravity.llm-system.svc.cluster.local
+      port: 3000
+
     # 🛡️ A6 API 中转渠道
     - name: a6api
       type: dns

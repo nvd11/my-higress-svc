@@ -7,6 +7,8 @@ on:
       - "plugins/**"
       - "wasm-plugin.yaml"
       - "config.yaml"
+      - "mcp-bridge.yaml"
+      - "ingress.yaml"
       - ".github/workflows/wasm-plugin-ci-cd.yml"
   pull_request:
     branches: [ main ]
@@ -14,6 +16,8 @@ on:
       - "plugins/**"
       - "wasm-plugin.yaml"
       - "config.yaml"
+      - "mcp-bridge.yaml"
+      - "ingress.yaml"
   workflow_dispatch:
 
 concurrency:
@@ -36,7 +40,7 @@ jobs:
       - name: Regenerate Pricing & Gatekeeper Models from config.yaml
         run: |
           cd plugins/finops-audit
-          CGO_ENABLED=0 go run internal/pricinggen/main.go -config ../../config.yaml -out pkg/finops/pricing_gen.go -gatekeeper-out ../ai-gatekeeper/models_gen.go
+          CGO_ENABLED=0 go run internal/pricinggen/main.go -config ../../config.yaml -out pkg/finops/pricing_gen.go -gatekeeper-out ../ai-gatekeeper/models_gen.go -mcpbridge-out ../../mcp-bridge.yaml -ingress-out ../../ingress.yaml
 
       - name: Validate WasmPlugin Specifications & VirtualKeys Consistency
         run: |
@@ -126,7 +130,7 @@ jobs:
         run: |
           echo "Compiling finops-audit..."
           cd plugins/finops-audit
-          CGO_ENABLED=0 go run internal/pricinggen/main.go -config ../../config.yaml -out pkg/finops/pricing_gen.go -gatekeeper-out ../ai-gatekeeper/models_gen.go
+          CGO_ENABLED=0 go run internal/pricinggen/main.go -config ../../config.yaml -out pkg/finops/pricing_gen.go -gatekeeper-out ../ai-gatekeeper/models_gen.go -mcpbridge-out ../../mcp-bridge.yaml -ingress-out ../../ingress.yaml
           CGO_ENABLED=0 GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -buildvcs=false -o plugin.wasm .
           echo "finops-audit Wasm: $(ls -lh plugin.wasm | awk '{print $5}')"
 
@@ -185,14 +189,14 @@ jobs:
           sed -i -E "s|url: oci://ghcr.io/nvd11/higress-finops-audit:.*|url: oci://ghcr.io/nvd11/higress-finops-audit:${{ github.sha }}|g" wasm-plugin.yaml
           sed -i -E "s|url: oci://ghcr.io/nvd11/higress-ai-gatekeeper:.*|url: oci://ghcr.io/nvd11/higress-ai-gatekeeper:${{ github.sha }}|g" wasm-plugin.yaml
 
-          # Track wasm-plugin.yaml and freshly generated Go models/pricing
+          # Track wasm-plugin.yaml, ingress.yaml, mcp-bridge.yaml and freshly generated Go models/pricing
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add wasm-plugin.yaml plugins/finops-audit/pkg/finops/pricing_gen.go plugins/ai-gatekeeper/models_gen.go
+          git add wasm-plugin.yaml mcp-bridge.yaml ingress.yaml plugins/finops-audit/pkg/finops/pricing_gen.go plugins/ai-gatekeeper/models_gen.go
 
           if ! git diff --cached --quiet; then
-            echo "Changes detected in wasm-plugin.yaml or generated Go code, committing..."
-            git commit -m "chore(gitops): sync generated models and bump wasm images to ${{ github.sha }} [skip ci]"
+            echo "Changes detected in wasm-plugin.yaml, ingress.yaml, mcp-bridge.yaml or generated Go code, committing..."
+            git commit -m "chore(gitops): sync topology, pricing and bump wasm images to ${{ github.sha }} [skip ci]"
             git push origin main
             echo "✅ Successfully synced GitOps repo with SHA ${{ github.sha }}"
           else
