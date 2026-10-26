@@ -94,3 +94,32 @@ export interface PayloadData {
   prompt_url: string;
   response_url: string;
 }
+
+export interface AntigravityBucket {
+  bucket_id: string;
+  display_name: string;
+  window: string;
+  remaining_fraction: number;
+  reset_time: string;
+  description: string;
+}
+
+export interface AntigravityModelGroup {
+  display_name: string;
+  description: string;
+  buckets: AntigravityBucket[];
+}
+
+export interface AntigravityAccountQuota {
+  email: string;
+  status: "healthy" | "rate_limited" | "error";
+  last_updated: string;
+  error_msg?: string;
+  groups: AntigravityModelGroup[];
+}
+
+export interface AntigravityQuotaResponse {
+  accounts: AntigravityAccountQuota[];
+  last_updated: string;
+}
+
