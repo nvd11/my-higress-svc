@@ -20,7 +20,7 @@ spec:
   priority: 900
   failStrategy: FAIL_CLOSE
   imagePullPolicy: Always
-  url: oci://ghcr.io/nvd11/higress-ai-gatekeeper:ac6c23025e67196fd42d1ed4e0f12adc09da37d5
+  url: oci://ghcr.io/nvd11/higress-ai-gatekeeper:9604fe3fe23f606cff839ecf3851ccb3528e4b1c
   defaultConfig:
     dashboard_api_url: "http://higress-dashboard-backend.higress-system.svc.cluster.local:4000/api/v1/internal/audit-log"
     virtual_keys:
@@ -54,7 +54,7 @@ spec:
   priority: 90
   failStrategy: FAIL_OPEN
   imagePullPolicy: Always
-  url: oci://ghcr.io/nvd11/higress-finops-audit:ac6c23025e67196fd42d1ed4e0f12adc09da37d5
+  url: oci://ghcr.io/nvd11/higress-finops-audit:9604fe3fe23f606cff839ecf3851ccb3528e4b1c
   defaultConfig:
     dashboard_api_url: "http://higress-dashboard-backend.higress-system.svc.cluster.local:4000/api/v1/internal/audit-log"
     default_fx_rate: 7.2300
