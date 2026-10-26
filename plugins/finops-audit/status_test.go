@@ -105,3 +105,41 @@ func TestExtractErrorMsg(t *testing.T) {
 		})
 	}
 }
+
+func TestFallbackModelName(t *testing.T) {
+	tests := []struct {
+		name     string
+		response string
+		expected string
+	}{
+		{
+			name:     "empty response defaults to unknown",
+			response: "",
+			expected: "unknown",
+		},
+		{
+			name:     "invalid json defaults to unknown",
+			response: "not a json",
+			expected: "unknown",
+		},
+		{
+			name:     "json without model defaults to unknown",
+			response: `{"error":{"message":"Request body is too large"}}`,
+			expected: "unknown",
+		},
+		{
+			name:     "json with model field extracts correctly",
+			response: `{"model":"gemini-3.8-flash","choices":[]}`,
+			expected: "gemini-3.8-flash",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := fallbackModelName(tt.response)
+			if got != tt.expected {
+				t.Errorf("fallbackModelName(%q) = %q, want %q", tt.response, got, tt.expected)
+			}
+		})
+	}
+}
