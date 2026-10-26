@@ -166,6 +166,30 @@ func extractErrorMsg(statusCode int, fullResponse string) *string {
 	return &errMsg
 }
 
+// fallbackModelName extracts model name from response JSON or defaults to "unknown"
+func fallbackModelName(fullResponse string) string {
+	if fullResponse != "" && gjson.Valid(fullResponse) {
+		if respModel := gjson.Get(fullResponse, "model").String(); respModel != "" {
+			return respModel
+		}
+	}
+	return "unknown"
+}
+
+// resolveRequestedModel cascades through ctx, request headers, response body, or defaults to "unknown"
+func resolveRequestedModel(ctx wrapper.HttpContext, fullResponse string) string {
+	if m, _ := ctx.GetContext(ctxModelRequested).(string); m != "" {
+		return m
+	}
+	if origModel, err := proxywasm.GetHttpRequestHeader("x-original-model"); err == nil && origModel != "" {
+		return origModel
+	}
+	if llmModel, err := proxywasm.GetHttpRequestHeader("x-higress-llm-model"); err == nil && llmModel != "" {
+		return llmModel
+	}
+	return fallbackModelName(fullResponse)
+}
+
 func onHttpResponseHeaders(ctx wrapper.HttpContext, config PluginConfig) types.Action {
 	statusStr, _ := proxywasm.GetHttpResponseHeader(":status")
 	statusCode := parseStatusCode(statusStr)
@@ -177,6 +201,16 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config PluginConfig) types.A
 	} else {
 		ctx.SetContext(ctxProvider, "unknown")
 	}
+
+	// 提前补位: 若 Body 阶段未成功捕获模型 (如 4xx/5xx 提前终止)，尝试从请求头打捞网关门禁标记
+	if m, _ := ctx.GetContext(ctxModelRequested).(string); m == "" {
+		if origModel, err := proxywasm.GetHttpRequestHeader("x-original-model"); err == nil && origModel != "" {
+			ctx.SetContext(ctxModelRequested, origModel)
+		} else if llmModel, err := proxywasm.GetHttpRequestHeader("x-higress-llm-model"); err == nil && llmModel != "" {
+			ctx.SetContext(ctxModelRequested, llmModel)
+		}
+	}
+
 	return types.ActionContinue
 }
 
@@ -198,10 +232,7 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config PluginConfig, c
 
 		reqID, _ := ctx.GetContext(ctxRequestID).(string)
 		apiKeyAlias, _ := ctx.GetContext(ctxAPIKeyAlias).(string)
-		modelRequested, _ := ctx.GetContext(ctxModelRequested).(string)
-		if modelRequested == "" {
-			modelRequested = "deepseek-v4-pro-0813"
-		}
+		modelRequested := resolveRequestedModel(ctx, fullResponse)
 		prompt, _ := ctx.GetContext(ctxPromptBody).(string)
 
 		var promptTokens, completionTokens, reasoningTokens, cacheReadTokens, totalTokens int
