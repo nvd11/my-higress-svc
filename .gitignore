@@ -26,3 +26,8 @@ tmp/
 .env
 *.local.yaml
 sa-key.json
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+

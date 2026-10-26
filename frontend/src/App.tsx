@@ -3,9 +3,11 @@ import { Navbar } from "./components/Navbar";
 import { MetricCards } from "./components/MetricCards";
 import { LogsTable } from "./components/LogsTable";
 import { PayloadDrawer } from "./components/PayloadDrawer";
+import { AntigravityQuotaTab } from "./components/AntigravityQuotaTab";
 import { LogItem, PaginatedLogsResponse, SummaryMetrics } from "./types";
 
 export const App: React.FC = () => {
+  const [activeTab, setActiveTab] = useState<"audit" | "antigravity">("audit");
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     // 默认选用客户端本地/香港时间自然日 (YYYY-MM-DD)，避免 UTC 跨日偏差
     const d = new Date();
@@ -126,6 +128,8 @@ export const App: React.FC = () => {
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col">
       {/* Top Navbar */}
       <Navbar
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
         selectedDate={selectedDate}
         onDateChange={(d) => {
           setSelectedDate(d);
@@ -139,58 +143,64 @@ export const App: React.FC = () => {
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-6 space-y-6">
-        {/* Metric Cards Banner */}
-        <MetricCards
-          metrics={metrics}
-          loading={loading}
-          hasActiveFilters={Boolean(
-            searchKeyword.trim() ||
-              payloadSearchKeyword.trim() ||
-              selectedKeyAlias.trim() ||
-              selectedModel.trim() ||
-              selectedStatusCode.trim()
-          )}
-        />
+        {activeTab === "antigravity" ? (
+          <AntigravityQuotaTab />
+        ) : (
+          <>
+            {/* Metric Cards Banner */}
+            <MetricCards
+              metrics={metrics}
+              loading={loading}
+              hasActiveFilters={Boolean(
+                searchKeyword.trim() ||
+                  payloadSearchKeyword.trim() ||
+                  selectedKeyAlias.trim() ||
+                  selectedModel.trim() ||
+                  selectedStatusCode.trim()
+              )}
+            />
 
-        {/* Audit Logs Table */}
-        <LogsTable
-          logsData={logsData}
-          loading={loading}
-          page={page}
-          onPageChange={setPage}
-          pageSize={pageSize}
-          onPageSizeChange={(s) => {
-            setPageSize(s);
-            setPage(1);
-          }}
-          searchKeyword={searchKeyword}
-          onSearchChange={(k) => {
-            setSearchKeyword(k);
-            setPage(1);
-          }}
-          payloadSearchKeyword={payloadSearchKeyword}
-          onPayloadSearchChange={(k) => {
-            setPayloadSearchKeyword(k);
-            setPage(1);
-          }}
-          selectedKeyAlias={selectedKeyAlias}
-          onKeyAliasChange={(k) => {
-            setSelectedKeyAlias(k);
-            setPage(1);
-          }}
-          selectedModel={selectedModel}
-          onModelChange={(m) => {
-            setSelectedModel(m);
-            setPage(1);
-          }}
-          selectedStatusCode={selectedStatusCode}
-          onStatusCodeChange={(c) => {
-            setSelectedStatusCode(c);
-            setPage(1);
-          }}
-          onSelectLog={(log) => setSelectedLog(log)}
-          selectedLogId={selectedLog?.request_id ?? null}
-        />
+            {/* Audit Logs Table */}
+            <LogsTable
+              logsData={logsData}
+              loading={loading}
+              page={page}
+              onPageChange={setPage}
+              pageSize={pageSize}
+              onPageSizeChange={(s) => {
+                setPageSize(s);
+                setPage(1);
+              }}
+              searchKeyword={searchKeyword}
+              onSearchChange={(k) => {
+                setSearchKeyword(k);
+                setPage(1);
+              }}
+              payloadSearchKeyword={payloadSearchKeyword}
+              onPayloadSearchChange={(k) => {
+                setPayloadSearchKeyword(k);
+                setPage(1);
+              }}
+              selectedKeyAlias={selectedKeyAlias}
+              onKeyAliasChange={(k) => {
+                setSelectedKeyAlias(k);
+                setPage(1);
+              }}
+              selectedModel={selectedModel}
+              onModelChange={(m) => {
+                setSelectedModel(m);
+                setPage(1);
+              }}
+              selectedStatusCode={selectedStatusCode}
+              onStatusCodeChange={(c) => {
+                setSelectedStatusCode(c);
+                setPage(1);
+              }}
+              onSelectLog={(log) => setSelectedLog(log)}
+              selectedLogId={selectedLog?.request_id ?? null}
+            />
+          </>
+        )}
       </main>
 
       {/* Sliding Payload Drawer */}
