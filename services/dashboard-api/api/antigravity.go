@@ -43,6 +43,16 @@ func getAntigravityClientSecret() string {
 	return string(b)
 }
 
+const (
+	// codeAssistBaseURL is the origin the Antigravity client actually talks to.
+	codeAssistBaseURL = "https://daily-cloudcode-pa.googleapis.com"
+	// codeAssistUserAgent must match the real CLI exactly: the server derives quota
+	// group visibility from it. Do not "modernise" this string.
+	codeAssistUserAgent = "antigravity/cli/1.4.7 (aidev_client; os_type=linux; arch=amd64; cl=1006008713; auth_method=consumer)"
+	// defaultCodeAssistProject is the fallback when loadCodeAssist does not report one.
+	defaultCodeAssistProject = "aicode-consumers"
+)
+
 type QuotaBucket struct {
 	BucketID          string  `json:"bucket_id"`
 	DisplayName       string  `json:"display_name"`
@@ -204,24 +214,29 @@ func fetchSingleAccountQuota(ctx context.Context, email, refreshToken string) Ac
 		return res
 	}
 
-	// 1. Fetch Summary (Claude & GPT models)
-	summaryGroup, err := fetchQuotaSummary(ctx, token)
-	if err == nil && summaryGroup != nil {
-		res.Groups = append(res.Groups, *summaryGroup)
+	// The quota RPC requires a cloudaicompanion project; resolve it per account.
+	project := fetchCodeAssistProject(ctx, token)
+	if project == "" {
+		project = defaultCodeAssistProject
 	}
 
-	// 2. Fetch Detailed (Gemini models)
-	geminiGroup, err := fetchDetailedGeminiQuota(ctx, token)
-	if err == nil && geminiGroup != nil {
-		// Put Gemini group first
-		res.Groups = append([]ModelGroupQuota{*geminiGroup}, res.Groups...)
+	groups, err := fetchQuotaSummaryGroups(ctx, token, project)
+	if err != nil {
+		res.Status = "error"
+		res.ErrorMsg = err.Error()
+		return res
 	}
+	res.Groups = groups
 
 	return res
 }
 
-func fetchQuotaSummary(ctx context.Context, token string) (*ModelGroupQuota, error) {
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary", bytes.NewReader([]byte("{}")))
+func fetchQuotaSummaryGroups(ctx context.Context, token, project string) ([]ModelGroupQuota, error) {
+	body, err := json.Marshal(map[string]string{"project": project})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", codeAssistBaseURL+"/v1internal:retrieveUserQuotaSummary", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -262,129 +277,65 @@ func fetchQuotaSummary(ctx context.Context, token string) (*ModelGroupQuota, err
 		return nil, fmt.Errorf("no groups returned")
 	}
 
-	g := rawResp.Groups[0]
-	group := &ModelGroupQuota{
-		DisplayName: g.DisplayName,
-		Description: g.Description,
-		Buckets:     make([]QuotaBucket, 0, len(g.Buckets)),
+	groups := make([]ModelGroupQuota, 0, len(rawResp.Groups))
+	for _, g := range rawResp.Groups {
+		group := ModelGroupQuota{
+			DisplayName: g.DisplayName,
+			Description: g.Description,
+			Buckets:     make([]QuotaBucket, 0, len(g.Buckets)),
+		}
+		for _, b := range g.Buckets {
+			group.Buckets = append(group.Buckets, QuotaBucket{
+				BucketID:          b.BucketID,
+				DisplayName:       b.DisplayName,
+				Window:            b.Window,
+				RemainingFraction: b.RemainingFraction,
+				ResetTime:         b.ResetTime,
+				Description:       b.Description,
+			})
+		}
+		groups = append(groups, group)
 	}
 
-	for _, b := range g.Buckets {
-		group.Buckets = append(group.Buckets, QuotaBucket{
-			BucketID:          b.BucketID,
-			DisplayName:       b.DisplayName,
-			Window:            b.Window,
-			RemainingFraction: b.RemainingFraction,
-			ResetTime:         b.ResetTime,
-			Description:       b.Description,
-		})
-	}
-
-	return group, nil
+	return groups, nil
 }
 
-func fetchDetailedGeminiQuota(ctx context.Context, token string) (*ModelGroupQuota, error) {
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota", bytes.NewReader([]byte("{}")))
+// fetchCodeAssistProject resolves the account's cloudaicompanion project. The quota
+// RPC requires it in the request body; without it the server only returns the
+// third-party (Claude/GPT) group and omits the Gemini group entirely.
+func fetchCodeAssistProject(ctx context.Context, token string) string {
+	body := []byte(`{"metadata":{"ideType":"ANTIGRAVITY","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}}`)
+	req, err := http.NewRequestWithContext(ctx, "POST", codeAssistBaseURL+"/v1internal:loadCodeAssist", bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return ""
 	}
 	setStandardGoogleHeaders(req, token)
 
 	client := &http.Client{Timeout: 8 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return ""
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("retrieveUserQuota http %d: %s", resp.StatusCode, string(b))
+		return ""
 	}
 
-	var rawResp struct {
-		Buckets []struct {
-			ModelID           string  `json:"modelId"`
-			TokenType         string  `json:"tokenType"`
-			RemainingFraction float64 `json:"remainingFraction"`
-			ResetTime         string  `json:"resetTime"`
-		} `json:"buckets"`
+	var raw struct {
+		CloudaicompanionProject string `json:"cloudaicompanionProject"`
 	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&rawResp); err != nil {
-		return nil, err
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return ""
 	}
-
-	// Find gemini-3.8-flash-tiered or any gemini bucket
-	var (
-		gemini5hFraction    = 1.0
-		geminiWeeklyFrac    = 1.0
-		geminiResetTime     = ""
-		foundGemini         = false
-	)
-
-	for _, b := range rawResp.Buckets {
-		if b.ModelID == "gemini-3.8-flash-tiered" || b.ModelID == "gemini-2.5-pro" {
-			gemini5hFraction = b.RemainingFraction
-			geminiResetTime = b.ResetTime
-			foundGemini = true
-			break
-		}
-	}
-
-	if !foundGemini {
-		for _, b := range rawResp.Buckets {
-			if len(b.ModelID) > 6 && b.ModelID[:6] == "gemini" {
-				gemini5hFraction = b.RemainingFraction
-				geminiResetTime = b.ResetTime
-				foundGemini = true
-				break
-			}
-		}
-	}
-
-	if !foundGemini {
-		return nil, fmt.Errorf("no gemini buckets found")
-	}
-
-	// Approximate weekly limit proportionally if not isolated
-	geminiWeeklyFrac = gemini5hFraction
-	if geminiWeeklyFrac > 0.65 {
-		geminiWeeklyFrac = gemini5hFraction * 0.95
-	}
-
-	group := &ModelGroupQuota{
-		DisplayName: "Gemini Models",
-		Description: "Models within this group: Gemini Flash, Gemini Pro",
-		Buckets: []QuotaBucket{
-			{
-				BucketID:          "gemini-weekly",
-				DisplayName:       "Weekly Limit Remaining",
-				Window:            "weekly",
-				RemainingFraction: geminiWeeklyFrac,
-				ResetTime:         geminiResetTime,
-				Description:       "You have used some of your weekly limit for Gemini models.",
-			},
-			{
-				BucketID:          "gemini-5h",
-				DisplayName:       "Five Hour Limit Remaining",
-				Window:            "5h",
-				RemainingFraction: gemini5hFraction,
-				ResetTime:         geminiResetTime,
-				Description:       "5-hour rate limit pool for Gemini models.",
-			},
-		},
-	}
-
-	return group, nil
+	return raw.CloudaicompanionProject
 }
 
 func setStandardGoogleHeaders(req *http.Request, token string) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "antigravity/1.11.5 windows/amd64")
-	req.Header.Set("X-Goog-Api-Client", "google-cloud-sdk vscode_cloudshelleditor/0.1")
-	req.Header.Set("Client-Metadata", `{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}`)
+	// The User-Agent is the gate for which quota groups the server returns: the desktop
+	// IDE UA only yields the Claude/GPT group, while the CLI UA yields the Gemini group too.
+	req.Header.Set("User-Agent", codeAssistUserAgent)
 }
 
 func fetchQuotasViaClusterProxy(ctx context.Context) (*AntigravityQuotaResponse, error) {
