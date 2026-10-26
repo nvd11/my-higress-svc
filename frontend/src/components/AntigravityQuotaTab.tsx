@@ -1,15 +1,28 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { Sparkles, RefreshCw, AlertCircle, CheckCircle2, Clock, Zap, ShieldAlert, Cpu } from "lucide-react";
-import { AntigravityQuotaResponse } from "../types";
+import { Sparkles, RefreshCw, AlertCircle, CheckCircle2, Clock, Zap, ShieldAlert, Cpu, Users } from "lucide-react";
+import { AntigravityQuotaResponse, AntigravityBucket } from "../types";
+
+/** Server sends English display names; map the known bucket ids to zh-CN. */
+const BUCKET_LABELS: Record<string, string> = {
+  "gemini-weekly": "周限额剩余",
+  "gemini-5h": "5 小时限额剩余",
+  "3p-weekly": "周限额剩余",
+  "3p-5h": "5 小时限额剩余",
+};
+
+const bucketLabel = (b: AntigravityBucket) =>
+  BUCKET_LABELS[b.bucket_id] ?? b.display_name ?? b.bucket_id;
+
+const windowBadge = (w: string) => (w === "weekly" ? "周" : w === "5h" ? "5h" : w);
 
 export const AntigravityQuotaTab: React.FC = () => {
   const [data, setData] = useState<AntigravityQuotaResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchQuota = useCallback(async (force = false) => {
+  const fetchQuota = useCallback(async (force = false, silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       setError(null);
       const res = await fetch(`/api/v1/antigravity/quota${force ? "?refresh=true" : ""}`);
       if (!res.ok) {
@@ -21,12 +34,15 @@ export const AntigravityQuotaTab: React.FC = () => {
       console.error("Failed to fetch antigravity quota:", err);
       setError(err?.message || "Failed to load quota");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
+  // Initial load + silent poll every 60s (backend caches for 60s).
   useEffect(() => {
     fetchQuota();
+    const id = window.setInterval(() => fetchQuota(false, true), 60_000);
+    return () => window.clearInterval(id);
   }, [fetchQuota]);
 
   const formatPercentage = (fraction: number) => {
@@ -66,6 +82,8 @@ export const AntigravityQuotaTab: React.FC = () => {
     }
   };
 
+  const accountCount = data?.accounts?.length ?? 0;
+
   return (
     <div className="space-y-6 animate-fadeIn">
       {/* Top Banner */}
@@ -83,8 +101,10 @@ export const AntigravityQuotaTab: React.FC = () => {
                 <Zap className="w-3 h-3 text-purple-600" /> Google AI Pro 订阅
               </span>
             </div>
-            <p className="text-sm text-slate-500 mt-1">
-              实时同步双账号（Gemini Models 与 Claude & GPT Models）的 5 小时滑动窗口与 Weekly 剩余用量
+            <p className="text-sm text-slate-500 mt-1 flex items-center gap-1.5">
+              <Users className="w-3.5 h-3.5 text-slate-400" />
+              实时同步 {accountCount} 个账号 · Gemini Models 与 Claude &amp; GPT Models 的
+              周限额与 5 小时滑动窗口 · 每 60 秒自动刷新
             </p>
           </div>
         </div>
@@ -182,16 +202,16 @@ export const AntigravityQuotaTab: React.FC = () => {
                   </div>
                 )}
 
-                {acc.groups?.map((group, gIdx) => (
-                  <div key={gIdx} className="space-y-3.5">
-                    <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                      <div className="flex items-center gap-2">
+                {acc.groups?.map((group) => (
+                  <div key={group.display_name} className="space-y-3.5">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-2 gap-3">
+                      <div className="flex items-center gap-2 shrink-0">
                         <Cpu className="w-4 h-4 text-indigo-600" />
                         <h4 className="text-sm font-bold text-slate-800">
                           {group.display_name}
                         </h4>
                       </div>
-                      <span className="text-xs text-slate-400 line-clamp-1 max-w-[240px]">
+                      <span className="text-xs text-slate-400 line-clamp-1 max-w-[240px]" title={group.description}>
                         {group.description}
                       </span>
                     </div>
@@ -200,6 +220,7 @@ export const AntigravityQuotaTab: React.FC = () => {
                       {group.buckets?.map((bucket) => {
                         const pctStr = formatPercentage(bucket.remaining_fraction);
                         const frac = bucket.remaining_fraction;
+                        const usedStr = formatPercentage(1 - frac);
                         const resetMsg = formatResetTime(bucket.reset_time);
 
                         return (
@@ -208,11 +229,14 @@ export const AntigravityQuotaTab: React.FC = () => {
                             className="bg-slate-50/80 hover:bg-slate-100/70 transition-colors border border-slate-200/60 rounded-xl p-3.5 flex flex-col justify-between"
                           >
                             <div>
-                              <div className="flex items-center justify-between text-xs mb-2">
-                                <span className="font-semibold text-slate-700">
-                                  {bucket.display_name}
+                              <div className="flex items-center justify-between text-xs mb-2 gap-2">
+                                <span className="font-semibold text-slate-700 flex items-center gap-1.5">
+                                  {bucketLabel(bucket)}
+                                  <span className="px-1.5 py-0.5 rounded bg-slate-200/70 text-[10px] font-mono text-slate-600">
+                                    {windowBadge(bucket.window)}
+                                  </span>
                                 </span>
-                                <span className={`font-mono font-bold text-sm ${getTextColor(frac)}`}>
+                                <span className={`font-mono font-bold text-sm shrink-0 ${getTextColor(frac)}`}>
                                   {pctStr}%
                                 </span>
                               </div>
@@ -223,6 +247,10 @@ export const AntigravityQuotaTab: React.FC = () => {
                                   className={`h-full rounded-full transition-all duration-500 ${getProgressColor(frac)}`}
                                   style={{ width: `${pctStr}%` }}
                                 ></div>
+                              </div>
+
+                              <div className="text-[11px] text-slate-400 font-mono">
+                                已用 {usedStr}% · 剩余 {pctStr}%
                               </div>
                             </div>
 
