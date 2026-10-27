@@ -76,8 +76,20 @@ type AccountQuota struct {
 	Groups      []ModelGroupQuota `json:"groups"`
 }
 
+type A6APIBilling struct {
+	TotalUsageUSD   float64 `json:"total_usage_usd"`
+	TotalUsageCNY   float64 `json:"total_usage_cny"`
+	SoftLimitUSD    float64 `json:"soft_limit_usd"`
+	HardLimitUSD    float64 `json:"hard_limit_usd"`
+	HasPaymentMethod bool   `json:"has_payment_method"`
+	Status          string  `json:"status"` // "active", "error"
+	ErrorMsg        string  `json:"error_msg,omitempty"`
+	LastUpdated     string  `json:"last_updated"`
+}
+
 type AntigravityQuotaResponse struct {
 	Accounts    []AccountQuota `json:"accounts"`
+	A6API       *A6APIBilling  `json:"a6api,omitempty"`
 	LastUpdated string         `json:"last_updated"`
 }
 
@@ -166,12 +178,103 @@ func loadAccountCredentials() []StoredAccountItem {
 	return nil
 }
 
+func fetchA6APIBilling(ctx context.Context) *A6APIBilling {
+	apiKey := os.Getenv("A6_API_KEY")
+	if apiKey == "" {
+		// 尝试从本地凭证文件或已知默认值获取
+		apiKey = "sk-jjoqdnu7lH5FG8OwHPQnYU8uHtRhWqe6yGtbSwER8UoVt5PB"
+	}
+
+	result := &A6APIBilling{
+		Status:      "active",
+		LastUpdated: time.Now().UTC().Format(time.RFC3339),
+	}
+
+	client := &http.Client{Timeout: 6 * time.Second}
+
+	// 1. 获取 subscription / limit
+	subReq, err := http.NewRequestWithContext(ctx, "GET", "https://api.a6api.com/v1/dashboard/billing/subscription", nil)
+	if err == nil {
+		subReq.Header.Set("Authorization", "Bearer "+apiKey)
+		if resp, err := client.Do(subReq); err == nil {
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				var sub struct {
+					HasPaymentMethod bool    `json:"has_payment_method"`
+					SoftLimitUSD     float64 `json:"soft_limit_usd"`
+					HardLimitUSD     float64 `json:"hard_limit_usd"`
+				}
+				if err := json.NewDecoder(resp.Body).Decode(&sub); err == nil {
+					result.HasPaymentMethod = sub.HasPaymentMethod
+					result.SoftLimitUSD = sub.SoftLimitUSD
+					result.HardLimitUSD = sub.HardLimitUSD
+				}
+			}
+		}
+	}
+
+	// 2. 获取 usage
+	usageReq, err := http.NewRequestWithContext(ctx, "GET", "https://api.a6api.com/v1/dashboard/billing/usage", nil)
+	if err != nil {
+		result.Status = "error"
+		result.ErrorMsg = err.Error()
+		return result
+	}
+	usageReq.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := client.Do(usageReq)
+	if err != nil {
+		result.Status = "error"
+		result.ErrorMsg = err.Error()
+		return result
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		result.Status = "error"
+		result.ErrorMsg = fmt.Sprintf("A6 API HTTP %d: %s", resp.StatusCode, string(b))
+		return result
+	}
+
+	var usageResp struct {
+		TotalUsage float64 `json:"total_usage"` // 单位: 美分 / points
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&usageResp); err != nil {
+		result.Status = "error"
+		result.ErrorMsg = err.Error()
+		return result
+	}
+
+	// total_usage 是美分或点数 (例如 727.07 = $7.2707)
+	result.TotalUsageUSD = usageResp.TotalUsage / 100.0
+	result.TotalUsageCNY = result.TotalUsageUSD * 7.23 // 默认对齐 7.23 汇率
+
+	return result
+}
+
 func fetchAllAntigravityQuotas(ctx context.Context) (*AntigravityQuotaResponse, error) {
+	// 异步并发拉取 A6 API 账单
+	var (
+		a6Billing *A6APIBilling
+		a6Wg      sync.WaitGroup
+	)
+	a6Wg.Add(1)
+	go func() {
+		defer a6Wg.Done()
+		a6Billing = fetchA6APIBilling(ctx)
+	}()
+
 	accounts := loadAccountCredentials()
 
 	// If no local credentials found, attempt to query cluster proxy if present
 	if len(accounts) == 0 {
-		return fetchQuotasViaClusterProxy(ctx)
+		resp, err := fetchQuotasViaClusterProxy(ctx)
+		a6Wg.Wait()
+		if resp != nil {
+			resp.A6API = a6Billing
+		}
+		return resp, err
 	}
 
 	var (
@@ -192,9 +295,11 @@ func fetchAllAntigravityQuotas(ctx context.Context) (*AntigravityQuotaResponse, 
 	}
 
 	wg.Wait()
+	a6Wg.Wait()
 
 	return &AntigravityQuotaResponse{
 		Accounts:    results,
+		A6API:       a6Billing,
 		LastUpdated: time.Now().UTC().Format(time.RFC3339),
 	}, nil
 }
