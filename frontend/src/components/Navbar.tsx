@@ -65,7 +65,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               }`}
             >
               <Sparkles className="w-3.5 h-3.5" />
-              反重力账号用量
+              上游配额与余额
             </button>
           </div>
         </div>

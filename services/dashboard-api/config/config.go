@@ -16,6 +16,7 @@ type Config struct {
 	RedisPort         string
 	RedisPassword     string
 	VictoriaLogsURL   string
+	AntigravityProxyURL string
 	DefaultUSDtoCNY   float64
 }
 
@@ -51,6 +52,7 @@ func LoadConfig() *Config {
 		RedisPort:       getEnv("REDIS_PORT", "6379"),
 		RedisPassword:   getEnv("REDIS_PASSWORD", "hsbc1234"),
 		VictoriaLogsURL: vlogsURL,
+		AntigravityProxyURL: getEnv("ANTIGRAVITY_PROXY_URL", "http://10.43.250.150:3000"),
 		DefaultUSDtoCNY: fxRate,
 	}
 }

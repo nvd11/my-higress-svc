@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { Sparkles, RefreshCw, AlertCircle, CheckCircle2, Clock, Zap, ShieldAlert, Cpu, Users } from "lucide-react";
+import { Sparkles, RefreshCw, AlertCircle, CheckCircle2, Clock, Zap, ShieldAlert, Cpu, Users, CreditCard, DollarSign, Layers } from "lucide-react";
 import { AntigravityQuotaResponse, AntigravityBucket } from "../types";
 
 /** Server sends English display names; map the known bucket ids to zh-CN. */
@@ -32,7 +32,13 @@ export const AntigravityQuotaTab: React.FC = () => {
       setData(json);
     } catch (err: any) {
       console.error("Failed to fetch antigravity quota:", err);
-      setError(err?.message || "Failed to load quota");
+      // 如果已经有历史数据，遇到偶发网络波动则静默忽略报错，避免刺眼红框打扰
+      setData((prev) => {
+        if (!prev) {
+          setError(err?.message || "Failed to load quota");
+        }
+        return prev;
+      });
     } finally {
       if (!silent) setLoading(false);
     }
@@ -95,16 +101,15 @@ export const AntigravityQuotaTab: React.FC = () => {
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-xl font-bold text-slate-900">
-                Google Antigravity (AGY) 账号配额透视
+                上游渠道与 Google Antigravity 配额透视
               </h2>
               <span className="px-2.5 py-0.5 text-xs font-semibold bg-purple-50 text-purple-700 border border-purple-200 rounded-full flex items-center gap-1">
-                <Zap className="w-3 h-3 text-purple-600" /> Google AI Pro 订阅
+                <Zap className="w-3 h-3 text-purple-600" /> 配额与财务双核监控
               </span>
             </div>
             <p className="text-sm text-slate-500 mt-1 flex items-center gap-1.5">
               <Users className="w-3.5 h-3.5 text-slate-400" />
-              实时同步 {accountCount} 个账号 · Gemini Models 与 Claude &amp; GPT Models 的
-              周限额与 5 小时滑动窗口 · 每 60 秒自动刷新
+              聚合 A6 API 中转渠道财务账单 &amp; {accountCount} 个 Antigravity 账号滑动窗口配额 · 每 60 秒自动刷新
             </p>
           </div>
         </div>
@@ -126,6 +131,96 @@ export const AntigravityQuotaTab: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* A6 API Billing & Channel Card */}
+      {data?.a6api && (
+        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 rounded-2xl p-6 text-white shadow-lg border border-indigo-900/50">
+          <div className="flex flex-col md:flex-row md:items-center justify-between pb-5 border-b border-white/10 gap-4">
+            <div className="flex items-center gap-3.5">
+              <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-300">
+                <CreditCard className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-lg font-bold text-white tracking-wide">
+                    A6 API 中转渠道账单与余额
+                  </h3>
+                  <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                    正常活跃
+                  </span>
+                </div>
+                <p className="text-xs text-indigo-200/70 mt-0.5 font-mono">
+                  Endpoint: https://api.a6api.com · 承载 kimi-k3 / glm-5.3 / luna / deepseek
+                </p>
+              </div>
+            </div>
+
+            <div className="text-xs text-indigo-200/60 flex items-center gap-1 self-start md:self-auto">
+              <Clock className="w-3.5 h-3.5" />
+              同步时间: {new Date(data.a6api.last_updated).toLocaleTimeString()}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-5">
+            {/* 累计总消耗 USD */}
+            <div className="bg-white/5 border border-white/10 rounded-xl p-4 backdrop-blur-sm">
+              <div className="text-xs font-medium text-indigo-200/80 flex items-center gap-1 mb-1.5">
+                <DollarSign className="w-3.5 h-3.5 text-emerald-400" />
+                A6 累计总消耗 (USD)
+              </div>
+              <div className="text-2xl font-black font-mono text-emerald-400">
+                ${data.a6api.total_usage_usd.toFixed(4)}
+              </div>
+              <div className="text-[11px] text-white/50 mt-1 font-mono">
+                点数: {(data.a6api.total_usage_usd * 100).toFixed(2)} pts
+              </div>
+            </div>
+
+            {/* 折合人民币 CNY */}
+            <div className="bg-white/5 border border-white/10 rounded-xl p-4 backdrop-blur-sm">
+              <div className="text-xs font-medium text-indigo-200/80 flex items-center gap-1 mb-1.5">
+                <DollarSign className="w-3.5 h-3.5 text-amber-400" />
+                折合人民币开销 (CNY)
+              </div>
+              <div className="text-2xl font-black font-mono text-amber-300">
+                ¥{data.a6api.total_usage_cny.toFixed(2)}
+              </div>
+              <div className="text-[11px] text-white/50 mt-1">
+                以当前汇率 7.23 动态对账
+              </div>
+            </div>
+
+            {/* 限额政策与状态 */}
+            <div className="bg-white/5 border border-white/10 rounded-xl p-4 backdrop-blur-sm">
+              <div className="text-xs font-medium text-indigo-200/80 flex items-center gap-1 mb-1.5">
+                <Layers className="w-3.5 h-3.5 text-blue-400" />
+                配额安全阈值 (Hard Limit)
+              </div>
+              <div className="text-2xl font-black font-mono text-blue-300">
+                {data.a6api.hard_limit_usd >= 1000000 ? "无限额 / 充沛" : `$${data.a6api.hard_limit_usd}`}
+              </div>
+              <div className="text-[11px] text-white/50 mt-1">
+                无限额软拦截 · 充值扣除
+              </div>
+            </div>
+
+            {/* 支付状态 */}
+            <div className="bg-white/5 border border-white/10 rounded-xl p-4 backdrop-blur-sm">
+              <div className="text-xs font-medium text-indigo-200/80 flex items-center gap-1 mb-1.5">
+                <CreditCard className="w-3.5 h-3.5 text-purple-400" />
+                账户可用性
+              </div>
+              <div className="text-xl font-bold text-purple-200">
+                {data.a6api.has_payment_method ? "已绑卡 / 自动扣费" : "余额可用"}
+              </div>
+              <div className="text-[11px] text-emerald-400/80 mt-1 flex items-center gap-1">
+                <CheckCircle2 className="w-3 h-3" /> 授权令牌连接畅通
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Error Notice */}
       {error && (

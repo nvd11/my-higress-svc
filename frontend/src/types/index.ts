@@ -118,8 +118,20 @@ export interface AntigravityAccountQuota {
   groups: AntigravityModelGroup[];
 }
 
+export interface A6APIBilling {
+  total_usage_usd: number;
+  total_usage_cny: number;
+  soft_limit_usd: number;
+  hard_limit_usd: number;
+  has_payment_method: boolean;
+  status: "active" | "error";
+  error_msg?: string;
+  last_updated: string;
+}
+
 export interface AntigravityQuotaResponse {
   accounts: AntigravityAccountQuota[];
+  a6api?: A6APIBilling;
   last_updated: string;
 }
 
