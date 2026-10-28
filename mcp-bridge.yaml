@@ -1,6 +1,6 @@
 # ==============================================================================
 # Higress McpBridge 服务注册配置 (为外部大模型 API 提供动态 DNS 解析与连接池)
-# 由 internal/pricinggen 自动生成自 config.yaml (sha256:60dadf6503d7); 严禁手改
+# 由 internal/pricinggen 自动生成自 config.yaml (sha256:852d6948bd7c); 严禁手改
 # ==============================================================================
 apiVersion: networking.higress.io/v1
 kind: McpBridge
