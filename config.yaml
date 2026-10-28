@@ -102,6 +102,19 @@ model_list:
   # 实扣口径 (2026-10-24 对账, A6 控制台 渠道 6038 bbgt-guard, 人民币/1M):
   #   输入 ¥0.006403 · 缓存读 ¥0.000213 · 输出 ¥0.025612 (4× 输入)
   # 折算成美元/1M (fx=7.23): 输入 0.00096 (沿用) · 缓存读 0.0000295 · 输出 0.00354
+  # 🛡️ A6 API 渠道: DeepSeek V4 Pro (滚动最新版 · 无日期快照后缀)
+  # ⚠️ 单价暂沿用 0813 快照口径，待 A6 账单核实后回填
+  - model_name: "deepseek-v4-pro"
+    provider: "a6api"
+    protocol: "openai"
+    upstream_url: "https://api.a6api.com/v1/chat/completions"
+    upstream_model: "deepseek-v4-pro"
+    api_key: "os.environ/A6_API_KEY"
+    pricing:
+      prompt_per_1m: 0.00096
+      completion_per_1m: 0.00354
+      cache_read_per_1m: 0.0000295
+
   - model_name: "deepseek-v4-pro-0813"
     provider: "a6api"
     protocol: "openai"
