@@ -12,22 +12,16 @@ metadata:
     app.kubernetes.io/part-of: my-higress-svc
 spec:
   registries:
-    # 🟢 Google Antigravity Proxy 渠道 (直通 Google AI Pro)
-    - name: antigravity-proxy
+    # 📡 provider: openai-proxy-for-antigravity (集群内服务) · 模型: gemini-3.8-flash
+    - name: openai-proxy-for-antigravity
       type: dns
       domain: openai-proxy-for-antigravity.llm-system.svc.cluster.local
       port: 3000
 
-    # 🛡️ A6 API 中转渠道
+    # 📡 provider: a6api (外部厂商渠道 (直连)) · 模型: kimi-k3, glm-5.3, deepseek-v4.1-flash, deepseek-v4.1-flash-1017, hy3, gpt-5.6-luna, deepseek-v4-pro, deepseek-v4-pro-0813
     - name: a6api
       type: dns
       domain: api.a6api.com
-      port: 443
-
-    # 🌕 元衡 API 渠道
-    - name: yuanheng
-      type: dns
-      domain: cn.meta-api.vip
       port: 443
 
     # 📊 Dashboard 审计入库与透视后端 (提供 Envoy Wasm 插件异步上报通道)

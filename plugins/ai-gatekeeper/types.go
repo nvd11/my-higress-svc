@@ -12,6 +12,11 @@ type PluginConfig struct {
 	CanonicalModels []string `json:"canonical_models"`
 	// 允许放行的别名及向上游真名的映射字典 (默认 12 个别名)
 	Aliases map[string]string `json:"aliases"`
+	// provider -> 上游真实 API Key (由 higress-provider-key-sync Job 从 Secret 回填)。
+	// 网关据此按 provider 注入 Authorization, 使 A6 / 元衡 等渠道可被直连,
+	// 无需依赖 Higress 的 header-control 注解插件 (该插件在 higress-core 无 Console
+	// 部署中默认未启用, 注解会被静默忽略)。
+	UpstreamKeys map[string]string `json:"upstream_keys"`
 }
 
 // GatekeeperRejectRecord 对应 401/400 阻断留痕送入 Dashboard-API 的数据结构

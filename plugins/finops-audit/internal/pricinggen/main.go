@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"go/format"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,6 +26,20 @@ import (
 
 	"github.com/nvd11/my-higress-svc/plugins/finops-audit/internal/chargeconfig"
 )
+
+// providerRoute config.yaml 中同一 provider 聚合出的上游渠道 (单一真源)
+//
+// 一个 provider 会生成两样东西:
+//  1. McpBridge 的 dns registry (host/port 来自 upstream_url)
+//  2. 一条按 x-higress-llm-provider 精确匹配的 Ingress (直连该上游, 不经任何中转)
+type providerRoute struct {
+	Name      string   // provider 名, 同时是 registry 名与路由匹配值
+	Scheme    string   // http / https
+	Host      string   // 上游主机名, 例如 api.a6api.com
+	Port      int      // 上游端口
+	APIKeyEnv string   // 例如 A6_API_KEY (来自 config 的 os.environ/A6_API_KEY)
+	Models    []string // 归属该渠道的模型主名
+}
 
 func main() {
 	var (
@@ -141,8 +156,13 @@ func main() {
 
 	sumHex := fmt.Sprintf("%x", sum)[:12]
 
+	providers, err := collectProviders(models)
+	if err != nil {
+		log.Fatalf("config.yaml provider 聚合失败: %v", err)
+	}
+
 	if *mcpbridgeOutPath != "" {
-		mcpYaml := generateMcpBridge(sumHex)
+		mcpYaml := generateMcpBridge(sumHex, providers)
 		if prev, err := os.ReadFile(*mcpbridgeOutPath); err == nil && string(prev) == mcpYaml {
 			fmt.Printf("%s 已是最新 (config.yaml sha256:%s), 未改动\n", *mcpbridgeOutPath, sumHex)
 		} else {
@@ -154,7 +174,7 @@ func main() {
 	}
 
 	if *ingressOutPath != "" {
-		ingressYaml := generateIngress(sumHex)
+		ingressYaml := generateIngress(sumHex, providers)
 		if prev, err := os.ReadFile(*ingressOutPath); err == nil && string(prev) == ingressYaml {
 			fmt.Printf("%s 已是最新 (config.yaml sha256:%s), 未改动\n", *ingressOutPath, sumHex)
 		} else {
@@ -166,8 +186,98 @@ func main() {
 	}
 }
 
-func generateMcpBridge(sumHash string) string {
-	return fmt.Sprintf(`# ==============================================================================
+func collectProviders(models chargeconfig.List) ([]providerRoute, error) {
+	idx := make(map[string]int, len(models))
+	out := make([]providerRoute, 0, 4)
+
+	for _, m := range models {
+		name := strings.TrimSpace(m.Provider)
+		if name == "" {
+			return nil, fmt.Errorf("模型 %s 缺少 provider 字段 (config.yaml 必须显式声明渠道)", m.Name)
+		}
+
+		u, err := url.Parse(strings.TrimSpace(m.UpstreamURL))
+		if err != nil || u.Hostname() == "" {
+			return nil, fmt.Errorf("模型 %s 的 upstream_url 非法: %q", m.Name, m.UpstreamURL)
+		}
+		scheme := strings.ToLower(u.Scheme)
+		if scheme != "http" && scheme != "https" {
+			return nil, fmt.Errorf("模型 %s 的 upstream_url 协议不支持: %q", m.Name, u.Scheme)
+		}
+		port := 0
+		if ps := u.Port(); ps != "" {
+			port, err = strconv.Atoi(ps)
+			if err != nil {
+				return nil, fmt.Errorf("模型 %s 的 upstream_url 端口非法: %q", m.Name, ps)
+			}
+		} else if scheme == "https" {
+			port = 443
+		} else {
+			port = 80
+		}
+
+		apiKeyEnv := ""
+		if kv := strings.TrimSpace(m.APIKey); kv != "" {
+			if !strings.HasPrefix(kv, "os.environ/") {
+				return nil, fmt.Errorf("模型 %s 的 api_key 必须写成 os.environ/XXX 引用, 禁止明文入库 (got %q)", m.Name, kv)
+			}
+			apiKeyEnv = strings.TrimPrefix(kv, "os.environ/")
+			if apiKeyEnv == "" {
+				return nil, fmt.Errorf("模型 %s 的 api_key 缺少环境变量名", m.Name)
+			}
+		}
+
+		host := u.Hostname()
+		if i, ok := idx[name]; ok {
+			p := &out[i]
+			if p.Scheme != scheme || p.Host != host || p.Port != port {
+				return nil, fmt.Errorf(
+					"provider %s 下的模型指向了不同上游 (%s://%s:%d vs %s://%s:%d), 请拆成不同 provider",
+					name, p.Scheme, p.Host, p.Port, scheme, host, port)
+			}
+			if p.APIKeyEnv != apiKeyEnv {
+				return nil, fmt.Errorf("provider %s 下的模型 api_key 引用不一致 (%q vs %q)", name, p.APIKeyEnv, apiKeyEnv)
+			}
+			p.Models = append(p.Models, m.Name)
+			continue
+		}
+
+		idx[name] = len(out)
+		out = append(out, providerRoute{
+			Name:      name,
+			Scheme:    scheme,
+			Host:      host,
+			Port:      port,
+			APIKeyEnv: apiKeyEnv,
+			Models:    []string{m.Name},
+		})
+	}
+	return out, nil
+}
+
+// isClusterInternal 判断上游是否为集群内部服务 (内部服务不注入厂商密钥,
+// 客户端 Virtual Key 原样透传, 避免把外部厂商 Key 打到自家 Pod 上)
+func isClusterInternal(host string) bool {
+	return strings.HasSuffix(host, ".cluster.local")
+}
+
+// slug 生成合法的 k8s 资源名片段
+func slug(s string) string {
+	b := strings.Builder{}
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+func generateMcpBridge(sumHash string, providers []providerRoute) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `# ==============================================================================
 # Higress McpBridge 服务注册配置 (为外部大模型 API 提供动态 DNS 解析与连接池)
 # 由 internal/pricinggen 自动生成自 config.yaml (sha256:%s); 严禁手改
 # ==============================================================================
@@ -181,39 +291,113 @@ metadata:
     app.kubernetes.io/part-of: my-higress-svc
 spec:
   registries:
-    # 🟢 Google Antigravity Proxy 渠道 (直通 Google AI Pro)
-    - name: antigravity-proxy
-      type: dns
-      domain: openai-proxy-for-antigravity.llm-system.svc.cluster.local
-      port: 3000
+`, sumHash)
 
-    # 🛡️ A6 API 中转渠道
-    - name: a6api
+	for _, p := range providers {
+		kind := "外部厂商渠道 (直连)"
+		if isClusterInternal(p.Host) {
+			kind = "集群内服务"
+		}
+		fmt.Fprintf(&b, `    # 📡 provider: %s (%s) · 模型: %s
+    - name: %s
       type: dns
-      domain: api.a6api.com
-      port: 443
+      domain: %s
+      port: %d
 
-    # 🌕 元衡 API 渠道
-    - name: yuanheng
-      type: dns
-      domain: cn.meta-api.vip
-      port: 443
+`, p.Name, kind, strings.Join(p.Models, ", "), p.Name, p.Host, p.Port)
+	}
 
-    # 📊 Dashboard 审计入库与透视后端 (提供 Envoy Wasm 插件异步上报通道)
+	b.WriteString(`    # 📊 Dashboard 审计入库与透视后端 (提供 Envoy Wasm 插件异步上报通道)
     - name: dashboard-backend
       type: dns
       domain: higress-dashboard-backend.higress-system.svc.cluster.local
       port: 4000
-`, sumHash)
+`)
+	return b.String()
 }
 
-func generateIngress(sumHash string) string {
-	return fmt.Sprintf(`# ==============================================================================
+func generateIngress(sumHash string, providers []providerRoute) string {
+	// 兜底目标 = 第一个集群内自建上游 (自建代理), 没有则不生成兜底路由
+	var fallback *providerRoute
+	for i := range providers {
+		if isClusterInternal(providers[i].Host) {
+			fallback = &providers[i]
+			break
+		}
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, `# ==============================================================================
 # Higress Ingress 业务入口多上游分发配置 (以 config.yaml 为唯一标准)
 # 由 internal/pricinggen 自动生成自 config.yaml (sha256:%s); 严禁手改
 # ==============================================================================
-# 1. 🟢 默认 AI 业务入口 (直连自建 openai-proxy-for-antigravity，调度 Google AI Pro 与外部模型)
+# 架构约定:
+#   1. 无 catch-all 兜底路由 —— provider 头缺失/未知时由 Envoy 直接 404,
+#      绝不允许静默串流到其它厂商 (A6 的请求被中转给 openai-proxy 的事故不会再发生)。
+#   2. 每个 provider 一条路由, 按 x-higress-llm-provider 精确匹配,
+#      该头由 ai-gatekeeper 依据 config.yaml 的 model -> provider 映射注入。
+#   3. 上游 Key 不落在 Ingress: 由 ai-gatekeeper 按 upstream_keys[provider] 注入
+#      (真实值由 higress-provider-key-sync Job 从 Secret 回填到 WasmPlugin)。
 # ==============================================================================
+`, sumHash)
+
+	for i, p := range providers {
+		proto := "HTTPS"
+		if p.Scheme == "http" {
+			proto = "HTTP"
+		}
+		fmt.Fprintf(&b, `# ── provider: %-32s → %s://%s:%d  (%s)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: higress-ai-ingress-%s
+  namespace: higress-system
+  labels:
+    app.kubernetes.io/name: higress-ai-gateway
+    app.kubernetes.io/part-of: my-higress-svc
+    higress.io/llm-provider: %s
+  annotations:
+    higress.io/backend-protocol: %s
+    higress.io/destination: %s.dns
+    higress.io/upstream-vhost: %s
+    higress.io/exact-match-header-x-higress-llm-provider: %s
+`, p.Name, p.Scheme, p.Host, p.Port, strings.Join(p.Models, ", "),
+			slug(p.Name), p.Name, proto, p.Name, p.Host, p.Name)
+
+		if p.APIKeyEnv != "" && !isClusterInternal(p.Host) {
+			// 上游鉴权不写 Authorization 注解: higress-core 无 Console 部署时
+			// header-control 插件默认未启用, higress.io/request-header-control-*
+			// 注解会被静默忽略 (已实测 401)。改由 ai-gatekeeper 按
+			// upstream_keys[provider] 注入 Authorization, 真实值由
+			// higress-provider-key-sync Job 从 Secret 回填。
+			// 这里只登记"该 provider 需要哪个 Secret 键", 供 Job 解析。
+			fmt.Fprintf(&b, "    higress.io/upstream-key-env: %s\n", p.APIKeyEnv)
+		}
+
+		b.WriteString(`spec:
+  ingressClassName: higress
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              resource:
+                apiGroup: networking.higress.io
+                kind: McpBridge
+                name: default
+`)
+		if i != len(providers)-1 || fallback != nil {
+			b.WriteString("---\n")
+		}
+	}
+
+	// ── 兜底路由: 仅用于「网关自身未被正确打标」的极端情况 ─────────────────────
+	// 指向集群内自建代理 (只服务 Antigravity/Gemini), 该代理已硬性拒绝任何
+	// 非 Gemini 模型并返回 400 —— 因此即使打标失败也是**响亮报错**,
+	// 绝不会像历史事故那样把 A6 请求静默中继到别家厂商。
+	if fallback != nil {
+		fmt.Fprintf(&b, `# ── 兜底: 未打标流量 → %s (只服务 Antigravity, 其它模型一律 400)
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -222,10 +406,11 @@ metadata:
   labels:
     app.kubernetes.io/name: higress-ai-gateway
     app.kubernetes.io/part-of: my-higress-svc
+    higress.io/llm-provider: fallback
   annotations:
-    higress.io/backend-protocol: HTTP
-    higress.io/destination: antigravity-proxy.dns:3000
-    higress.io/upstream-vhost: openai-proxy-for-antigravity.llm-system.svc.cluster.local
+    higress.io/backend-protocol: %s
+    higress.io/destination: %s.dns
+    higress.io/upstream-vhost: %s
 spec:
   ingressClassName: higress
   rules:
@@ -238,68 +423,10 @@ spec:
                 apiGroup: networking.higress.io
                 kind: McpBridge
                 name: default
----
-# ==============================================================================
-# 2. 🟢 自建 Google Antigravity Proxy 显式路由
-# ==============================================================================
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: higress-ai-ingress-antigravity
-  namespace: higress-system
-  labels:
-    app.kubernetes.io/name: higress-ai-gateway
-    app.kubernetes.io/part-of: my-higress-svc
-  annotations:
-    higress.io/backend-protocol: HTTP
-    higress.io/destination: antigravity-proxy.dns:3000
-    higress.io/upstream-vhost: openai-proxy-for-antigravity.llm-system.svc.cluster.local
-    higress.io/exact-match-header-x-higress-llm-provider: openai-proxy-for-antigravity
-spec:
-  ingressClassName: higress
-  rules:
-    - http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              resource:
-                apiGroup: networking.higress.io
-                kind: McpBridge
-                name: default
----
-# ==============================================================================
-# 3. 🛡️ A6 API 商业渠道显式路由 (支持指定 x-higress-llm-provider: a6api 显式直连)
-# ==============================================================================
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: higress-ai-ingress-a6api
-  namespace: higress-system
-  labels:
-    app.kubernetes.io/name: higress-ai-gateway
-    app.kubernetes.io/part-of: my-higress-svc
-  annotations:
-    higress.io/backend-protocol: HTTPS
-    higress.io/destination: a6api.dns
-    higress.io/upstream-vhost: api.a6api.com
-    higress.io/exact-match-header-x-higress-llm-provider: a6api
-    # 🎯 授权头由集群运行时注入真实 Key，由 ArgoCD ignoreDifferences 纳管避免泄露
-    higress.io/request-header-control-update: |
-      Authorization Bearer A6_API_KEY_PLACEHOLDER
-spec:
-  ingressClassName: higress
-  rules:
-    - http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              resource:
-                apiGroup: networking.higress.io
-                kind: McpBridge
-                name: default
-`, sumHash)
+`, fallback.Name, strings.ToUpper(fallback.Scheme), fallback.Name, fallback.Host)
+	}
+
+	return b.String()
 }
 
 func num(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }

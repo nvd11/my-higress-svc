@@ -1,0 +1,128 @@
+# ==============================================================================
+# Higress 上游 Provider 密钥注入 Job (ArgoCD PostSync Hook)
+# ==============================================================================
+# 业务背景与教训:
+#   1. config.yaml 是唯一真源, pricinggen 为每个 provider 生成一条直连 Ingress;
+#   2. 上游真实 Key 绝不落 Git, WasmPlugin 里只写 __ENV_KEY__ 占位符;
+#   3. ⚠️ 曾尝试用 higress.io/request-header-control-update 注解注入, 实测无效:
+#      higress-core 无 Console 部署时 header-control 插件默认未启用, 注解被静默忽略
+#      (导致 A6 直连一直 401)。因此改为由 ai-gatekeeper 在请求阶段按
+#      upstream_keys[provider] 注入 Authorization, 本 Job 只负责回填真实值。
+#   4. 本 Job 在每次 ArgoCD 同步后运行; ArgoCD 侧对 WasmPlugin 的 defaultConfig
+#      配了 ignoreDifferences, 回填结果不会被 selfHeal 覆盖; Vault 轮换后自动刷新。
+# ==============================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: higress-provider-key-sync
+  namespace: higress-system
+  labels:
+    app.kubernetes.io/name: higress-provider-key-sync
+    app.kubernetes.io/part-of: my-higress-svc
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: higress-provider-key-sync
+  namespace: higress-system
+  labels:
+    app.kubernetes.io/name: higress-provider-key-sync
+    app.kubernetes.io/part-of: my-higress-svc
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+  - apiGroups: ["extensions.higress.io"]
+    resources: ["wasmplugins"]
+    verbs: ["get", "list", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: higress-provider-key-sync
+  namespace: higress-system
+  labels:
+    app.kubernetes.io/name: higress-provider-key-sync
+    app.kubernetes.io/part-of: my-higress-svc
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: higress-provider-key-sync
+subjects:
+  - kind: ServiceAccount
+    name: higress-provider-key-sync
+    namespace: higress-system
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: higress-provider-key-sync
+  namespace: higress-system
+  labels:
+    app.kubernetes.io/name: higress-provider-key-sync
+    app.kubernetes.io/part-of: my-higress-svc
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "10"
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: higress-provider-key-sync
+    spec:
+      restartPolicy: Never
+      serviceAccountName: higress-provider-key-sync
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+      containers:
+        - name: key-sync
+          image: alpine/k8s:1.30.0
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -uo pipefail
+              NS=higress-system
+              SECRET=higress-ai-secrets
+              PLUGIN=ai-gatekeeper
+              rc=0
+
+              # 从 Git 管理的 Ingress 读取"该 provider 需要哪个 Secret 键"
+              # (由 pricinggen 依据 config.yaml 的 api_key 自动生成)
+              pairs=""
+              for ing in $(kubectl -n "$NS" get ingress \
+                  -l app.kubernetes.io/part-of=my-higress-svc \
+                  -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'); do
+                env=$(kubectl -n "$NS" get ingress "$ing" \
+                  -o jsonpath='{.metadata.annotations.higress\.io/upstream-key-env}' 2>/dev/null || true)
+                [ -z "$env" ] && continue
+                provider=$(kubectl -n "$NS" get ingress "$ing" \
+                  -o jsonpath='{.metadata.labels.higress\.io/llm-provider}' 2>/dev/null || true)
+                [ -z "$provider" ] && { echo "ERROR: Ingress/$ing 缺少 higress.io/llm-provider 标签"; rc=1; continue; }
+                val=$(kubectl -n "$NS" get secret "$SECRET" \
+                  -o jsonpath="{.data.$env}" 2>/dev/null | base64 -d 2>/dev/null || true)
+                if [ -z "$val" ]; then
+                  echo "ERROR: Secret/$SECRET 缺少键 $env (Ingress/$ing 需要)"
+                  rc=1
+                  continue
+                fi
+                echo "provider $provider <- secret key $env (${#val} bytes)"
+                pairs="${pairs}\"${provider}\":\"${val}\","
+              done
+
+              if [ -z "$pairs" ]; then
+                echo "no provider requires upstream key, nothing to do"
+                exit $rc
+              fi
+
+              patch="{\"spec\":{\"defaultConfig\":{\"upstream_keys\":{${pairs%,}}}}}"
+              if kubectl -n "$NS" patch wasmplugin "$PLUGIN" --type merge -p "$patch" >/dev/null; then
+                echo "WasmPlugin/$PLUGIN upstream_keys updated"
+              else
+                echo "ERROR: patch WasmPlugin/$PLUGIN failed"
+                rc=1
+              fi
+              exit $rc
