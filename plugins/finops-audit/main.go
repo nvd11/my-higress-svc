@@ -94,7 +94,11 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig) types.Ac
 	}
 
 	consumer := ""
-	if len(config.VirtualKeys) > 0 {
+	if c, err := proxywasm.GetHttpRequestHeader("x-consumer"); err == nil && strings.TrimSpace(c) != "" {
+		consumer = strings.TrimSpace(c)
+	} else if c, err := proxywasm.GetHttpRequestHeader("x-mse-consumer"); err == nil && strings.TrimSpace(c) != "" {
+		consumer = strings.TrimSpace(c)
+	} else if len(config.VirtualKeys) > 0 {
 		if token == "" {
 			// 未携带任何认证 Token，严防匿名免鉴权穿透
 			_ = proxywasm.SendHttpResponse(401, [][2]string{{"Content-Type", "application/json"}}, []byte(`{"error":{"message":"Missing Bearer Token or API Key","type":"invalid_request_error","code":"unauthorized"}}`), -1)
@@ -109,13 +113,6 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig) types.Ac
 		}
 	}
 
-	// 2. 兜底读取外部网关注入的标签
-	if consumer == "" {
-		consumer, _ = proxywasm.GetHttpRequestHeader("x-mse-consumer")
-	}
-	if consumer == "" {
-		consumer, _ = proxywasm.GetHttpRequestHeader("x-consumer")
-	}
 	if consumer == "" {
 		consumer = "default"
 	}

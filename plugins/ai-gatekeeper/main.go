@@ -260,6 +260,16 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig) types.Ac
 		return types.ActionPause
 	}
 
+	// 5. 携带请求体的请求（如 /v1/chat/completions）：
+	// 必须在 Header 阶段返回 ActionPause (对应 Envoy FilterHeadersStatus::StopIteration)，
+	// 阻止 Envoy 在 decodeHeaders 完成后执行 `request_headers_ = nullptr`。
+	// 只有保留 request_headers_ 句柄，后续 onHttpRequestBody 中才能合法修改
+	// Authorization 与 x-higress-llm-* 请求头，避免触发 host "bad argument" 致命错误。
+	// 在 onHttpRequestBody 完成请求头注入与路由重算后，调用 ResumeHttpRequest() 恢复流处理。
+	if ctx.HasRequestBody() {
+		return types.ActionPause
+	}
+
 	return types.ActionContinue
 }
 
@@ -268,6 +278,7 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 		return types.ActionContinue
 	}
 	if len(body) == 0 {
+		_ = proxywasm.ResumeHttpRequest()
 		return types.ActionContinue
 	}
 
@@ -370,5 +381,7 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 	ctx.SetContext(ctxOriginalModel, model)
 	ctx.SetContext(ctxModelRequested, resolvedModel)
 
+	// 恢复在 onHttpRequestHeaders 中暂停的 HTTP 请求解码流
+	_ = proxywasm.ResumeHttpRequest()
 	return types.ActionContinue
 }
