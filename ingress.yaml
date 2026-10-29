@@ -2,47 +2,27 @@
 # Higress Ingress 业务入口多上游分发配置 (以 config.yaml 为唯一标准)
 # 由 internal/pricinggen 自动生成自 config.yaml (sha256:f8cff57b5e38); 严禁手改
 # ==============================================================================
-# 1. 🟢 默认 AI 业务入口 (直连自建 openai-proxy-for-antigravity，调度 Google AI Pro 与外部模型)
+# 架构约定:
+#   1. 无 catch-all 兜底路由 —— provider 头缺失/未知时由 Envoy 直接 404,
+#      绝不允许静默串流到其它厂商 (A6 的请求被中转给 openai-proxy 的事故不会再发生)。
+#   2. 每个 provider 一条路由, 按 x-higress-llm-provider 精确匹配,
+#      该头由 ai-gatekeeper 依据 config.yaml 的 model -> provider 映射注入。
+#   3. 上游 Key 不落在 Ingress: 由 ai-gatekeeper 按 upstream_keys[provider] 注入
+#      (真实值由 higress-provider-key-sync Job 从 Secret 回填到 WasmPlugin)。
 # ==============================================================================
+# ── provider: openai-proxy-for-antigravity     → http://openai-proxy-for-antigravity.llm-system.svc.cluster.local:3000  (gemini-3.8-flash)
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: higress-ai-ingress
+  name: higress-ai-ingress-openai-proxy-for-antigravity
   namespace: higress-system
   labels:
     app.kubernetes.io/name: higress-ai-gateway
     app.kubernetes.io/part-of: my-higress-svc
+    higress.io/llm-provider: openai-proxy-for-antigravity
   annotations:
     higress.io/backend-protocol: HTTP
-    higress.io/destination: antigravity-proxy.dns:3000
-    higress.io/upstream-vhost: openai-proxy-for-antigravity.llm-system.svc.cluster.local
-spec:
-  ingressClassName: higress
-  rules:
-    - http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              resource:
-                apiGroup: networking.higress.io
-                kind: McpBridge
-                name: default
----
-# ==============================================================================
-# 2. 🟢 自建 Google Antigravity Proxy 显式路由
-# ==============================================================================
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: higress-ai-ingress-antigravity
-  namespace: higress-system
-  labels:
-    app.kubernetes.io/name: higress-ai-gateway
-    app.kubernetes.io/part-of: my-higress-svc
-  annotations:
-    higress.io/backend-protocol: HTTP
-    higress.io/destination: antigravity-proxy.dns:3000
+    higress.io/destination: openai-proxy-for-antigravity.dns
     higress.io/upstream-vhost: openai-proxy-for-antigravity.llm-system.svc.cluster.local
     higress.io/exact-match-header-x-higress-llm-provider: openai-proxy-for-antigravity
 spec:
@@ -58,9 +38,7 @@ spec:
                 kind: McpBridge
                 name: default
 ---
-# ==============================================================================
-# 3. 🛡️ A6 API 商业渠道显式路由 (支持指定 x-higress-llm-provider: a6api 显式直连)
-# ==============================================================================
+# ── provider: a6api                            → https://api.a6api.com:443  (kimi-k3, glm-5.3, deepseek-v4.1-flash, deepseek-v4.1-flash-1017, hy3, gpt-5.6-luna, deepseek-v4-pro, deepseek-v4-pro-0813)
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -69,14 +47,40 @@ metadata:
   labels:
     app.kubernetes.io/name: higress-ai-gateway
     app.kubernetes.io/part-of: my-higress-svc
+    higress.io/llm-provider: a6api
   annotations:
     higress.io/backend-protocol: HTTPS
     higress.io/destination: a6api.dns
     higress.io/upstream-vhost: api.a6api.com
     higress.io/exact-match-header-x-higress-llm-provider: a6api
-    # 🎯 授权头由集群运行时注入真实 Key，由 ArgoCD ignoreDifferences 纳管避免泄露
-    higress.io/request-header-control-update: |
-      Authorization Bearer A6_API_KEY_PLACEHOLDER
+    higress.io/upstream-key-env: A6_API_KEY
+spec:
+  ingressClassName: higress
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              resource:
+                apiGroup: networking.higress.io
+                kind: McpBridge
+                name: default
+---
+# ── 兜底: 未打标流量 → openai-proxy-for-antigravity (只服务 Antigravity, 其它模型一律 400)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: higress-ai-ingress
+  namespace: higress-system
+  labels:
+    app.kubernetes.io/name: higress-ai-gateway
+    app.kubernetes.io/part-of: my-higress-svc
+    higress.io/llm-provider: fallback
+  annotations:
+    higress.io/backend-protocol: HTTP
+    higress.io/destination: openai-proxy-for-antigravity.dns
+    higress.io/upstream-vhost: openai-proxy-for-antigravity.llm-system.svc.cluster.local
 spec:
   ingressClassName: higress
   rules:
