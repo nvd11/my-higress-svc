@@ -80,6 +80,23 @@ model_list:
       completion_per_1m: 0.0
       cache_read_per_1m: 0.0
 
+  # ⚡ A6 API 渠道: deepseek-v4-flash-0731 (超长文本高速推理模型 · 实测支持 250k tokens)
+  # ⚠️ a6api 未公开单价，pricing 暂记 0，待账单核实后回填
+  - model_name: "deepseek-v4-flash-0731"
+    aliases:
+      - "DeepSeek-V4-Flash-0731"
+      - "ds-v4-flash-0731"
+    provider: "a6api"
+    protocol: "openai"
+    upstream_url: "https://api.a6api.com/v1/chat/completions"
+    upstream_model: "DeepSeek-V4-Flash-0731"
+    api_key: "os.environ/A6_API_KEY"
+    fallback: "deepseek-v4.1-flash-1017"
+    pricing:
+      prompt_per_1m: 0.0
+      completion_per_1m: 0.0
+      cache_read_per_1m: 0.0
+
   # 👁️ A6 API 渠道: hy3 (多模态视觉模型 · opencode vision-translator 专用)
   # 实测 2026-10-24: 320x120 图 5.2~5.9s；800x600 图 11.8~12.7s；reasoning 0；OCR 准确
   # ⚠️ a6api 未公开单价，pricing 暂记 0，待账单核实后回填

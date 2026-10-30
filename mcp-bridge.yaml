@@ -1,6 +1,6 @@
 # ==============================================================================
 # Higress McpBridge 服务注册配置 (为外部大模型 API 提供动态 DNS 解析与连接池)
-# 由 internal/pricinggen 自动生成自 config.yaml (sha256:f8cff57b5e38); 严禁手改
+# 由 internal/pricinggen 自动生成自 config.yaml (sha256:0c6835104255); 严禁手改
 # ==============================================================================
 apiVersion: networking.higress.io/v1
 kind: McpBridge
@@ -18,7 +18,7 @@ spec:
       domain: openai-proxy-for-antigravity.llm-system.svc.cluster.local
       port: 3000
 
-    # 📡 provider: a6api (外部厂商渠道 (直连)) · 模型: kimi-k3, glm-5.3, deepseek-v4.1-flash, deepseek-v4.1-flash-1017, hy3, gpt-5.6-luna, deepseek-v4-pro, deepseek-v4-pro-0813
+    # 📡 provider: a6api (外部厂商渠道 (直连)) · 模型: kimi-k3, glm-5.3, deepseek-v4.1-flash, deepseek-v4.1-flash-1017, deepseek-v4-flash-0731, hy3, gpt-5.6-luna, deepseek-v4-pro, deepseek-v4-pro-0813
     - name: a6api
       type: dns
       domain: api.a6api.com
