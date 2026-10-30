@@ -1,6 +1,6 @@
 # ==============================================================================
 # Higress Ingress 业务入口多上游分发配置 (以 config.yaml 为唯一标准)
-# 由 internal/pricinggen 自动生成自 config.yaml (sha256:f8cff57b5e38); 严禁手改
+# 由 internal/pricinggen 自动生成自 config.yaml (sha256:0c6835104255); 严禁手改
 # ==============================================================================
 # 架构约定:
 #   1. 无 catch-all 兜底路由 —— provider 头缺失/未知时由 Envoy 直接 404,
@@ -38,7 +38,7 @@ spec:
                 kind: McpBridge
                 name: default
 ---
-# ── provider: a6api                            → https://api.a6api.com:443  (kimi-k3, glm-5.3, deepseek-v4.1-flash, deepseek-v4.1-flash-1017, hy3, gpt-5.6-luna, deepseek-v4-pro, deepseek-v4-pro-0813)
+# ── provider: a6api                            → https://api.a6api.com:443  (kimi-k3, glm-5.3, deepseek-v4.1-flash, deepseek-v4.1-flash-1017, deepseek-v4-flash-0731, hy3, gpt-5.6-luna, deepseek-v4-pro, deepseek-v4-pro-0813)
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
