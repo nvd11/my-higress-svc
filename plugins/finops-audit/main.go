@@ -3,6 +3,7 @@ package main
 import (
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
@@ -21,6 +22,10 @@ const (
 	ctxResponseBody   = "response_body"
 	ctxProvider       = "provider"
 	ctxStatusCode     = "status_code"
+	// ctxStartNs: 请求进入网关的单调时间戳(纳秒), 用于自计时算端到端耗时
+	ctxStartNs = "req_start_ns"
+	// ctxLatencyMS: Header 阶段落地的 Envoy 上游耗时(x-envoy-upstream-service-time)
+	ctxLatencyMS = "upstream_latency_ms"
 )
 
 func main() {}
@@ -55,6 +60,11 @@ func parseConfig(json gjson.Result, config *PluginConfig) error {
 }
 
 func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig) types.Action {
+	// 记录请求到达网关的时刻, 供流结束(EOS)时自计时算端到端真实耗时。
+	// 必须在此处记录: Envoy 的 x-envoy-upstream-service-time 在流式 body 阶段不可读,
+	// 只有 Header 阶段能拿到, 而流式响应的该头仅为"首字节耗时", 无法反映完整推理时长。
+	ctx.SetContext(ctxStartNs, time.Now().UnixNano())
+
 	// 放行 OPTIONS 跨域预检请求与基础健康检查
 	method, _ := proxywasm.GetHttpRequestHeader(":method")
 	if strings.EqualFold(method, "OPTIONS") {
@@ -192,8 +202,20 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config PluginConfig) types.A
 	statusCode := parseStatusCode(statusStr)
 	ctx.SetContext(ctxStatusCode, statusCode)
 
-	provider, _ := proxywasm.GetHttpResponseHeader("x-envoy-upstream-service-time")
-	if provider != "" {
+	// ⚠️ 关键: proxy-wasm-go-sdk 的 GetHttpResponseHeader 注释明确限定
+	//   "Only available during OnHttpResponseHeaders and OnHttpStreamDone."
+	// 旧实现在 onHttpStreamingResponseBody(EOS) 里读 x-envoy-upstream-service-time,
+	// 迁移到 Go 1.24 wasip1 + 新版 SDK 后该调用恒返回空 -> 所有耗时被记成 0ms。
+	// 因此必须在这里(唯一可读的 Header 阶段)把值落地到 context。
+	upstreamMS := 0
+	if v, err := proxywasm.GetHttpResponseHeader("x-envoy-upstream-service-time"); err == nil {
+		if ms, convErr := strconv.Atoi(strings.TrimSpace(v)); convErr == nil && ms >= 0 {
+			upstreamMS = ms
+		}
+	}
+	ctx.SetContext(ctxLatencyMS, upstreamMS)
+
+	if upstreamMS > 0 {
 		ctx.SetContext(ctxProvider, "google-gemini")
 	} else {
 		ctx.SetContext(ctxProvider, "unknown")
@@ -220,11 +242,16 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config PluginConfig, c
 
 	if isLastChunk {
 		fullResponse, _ := ctx.GetContext(ctxResponseBody).(string)
+
+		// 端到端耗时: 优先自计时(精确覆盖超长流式思考/推理), 兜底取 Header 阶段缓存的 Envoy 上游耗时
 		latency := 0
-		if val, err := proxywasm.GetHttpResponseHeader("x-envoy-upstream-service-time"); err == nil && val != "" {
-			if ms, err := strconv.Atoi(val); err == nil {
-				latency = ms
+		if startNs, ok := ctx.GetContext(ctxStartNs).(int64); ok && startNs > 0 {
+			if e2e := int((time.Now().UnixNano() - startNs) / int64(time.Millisecond)); e2e > 0 && e2e < 24*60*60*1000 {
+				latency = e2e
 			}
+		}
+		if upstreamMS, ok := ctx.GetContext(ctxLatencyMS).(int); ok && upstreamMS > latency {
+			latency = upstreamMS
 		}
 
 		reqID, _ := ctx.GetContext(ctxRequestID).(string)
