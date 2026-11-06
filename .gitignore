@@ -5,6 +5,9 @@
 bin/
 dist/
 build/
+# Compiled native plugin binaries (bare, extension-less)
+plugins/ai-gatekeeper/ai-gatekeeper
+plugins/finops-audit/finops-audit
 
 # Go / TinyGo
 vendor/
