@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -319,6 +320,11 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 		newBody, err := rewriteBodyModel(body, resolvedModel)
 		if err == nil {
 			_ = proxywasm.ReplaceHttpRequestBody(newBody)
+			// ⚠️ 必须同步 content-length: ReplaceHttpRequestBody 不会自动更新该头，
+			//    别名与规范名长度不同时会导致上游按旧长度读取 →
+			//      变长: JSON 被截断 (400)
+			//      变短: 上游死等缺失字节 (30s 超时 → 502)
+			_ = proxywasm.ReplaceHttpRequestHeader("content-length", strconv.Itoa(len(newBody)))
 		}
 	}
 
