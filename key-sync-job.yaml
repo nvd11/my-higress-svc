@@ -40,6 +40,11 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get"]
+  # 需要读取 Ingress 上的 higress.io/upstream-key-env 标注,
+  # 才能知道每个 provider 该用哪个 Secret 键回填 upstream_keys
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list"]
   - apiGroups: ["extensions.higress.io"]
     resources: ["wasmplugins"]
     verbs: ["get", "list", "patch", "update"]

@@ -156,3 +156,18 @@ model_list:
       prompt_per_1m: 0.00096
       completion_per_1m: 0.00354
       cache_read_per_1m: 0.0000295
+
+  # 🌊 Mew API 渠道: DeepSeek V4.1 Flash (天卡不限量 · 备用上游)
+  # ⚠️ 模型名故意用大写变体, 以与 a6api 的 deepseek-v4.1-flash 区分
+  #    (mew 对模型名大小写不敏感, 实测 DeepSeek-V4.1-Flash -> 200)
+  # ⚠️ 计费按请求计点 (points_consumed), 单价未知, pricing 暂记 0
+  - model_name: "DeepSeek-V4.1-Flash"
+    provider: "mewapi"
+    protocol: "openai"
+    upstream_url: "https://api-mew.me/v1/chat/completions"
+    upstream_model: "deepseek-v4.1-flash"
+    api_key: "os.environ/MEW_API_KEY"
+    pricing:
+      prompt_per_1m: 0.0
+      completion_per_1m: 0.0
+      cache_read_per_1m: 0.0
