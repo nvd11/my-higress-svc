@@ -1,5 +1,5 @@
 # ==============================================================================
-# Higress 上游 Provider 密钥注入 Job (ArgoCD PostSync Hook)
+# Higress 上游 Provider 密钥 + 网关 Virtual Keys 注入 Job (ArgoCD PostSync Hook)
 # ==============================================================================
 # 业务背景与教训:
 #   1. config.yaml 是唯一真源, pricinggen 为每个 provider 生成一条直连 Ingress;
@@ -10,6 +10,14 @@
 #      upstream_keys[provider] 注入 Authorization, 本 Job 只负责回填真实值。
 #   4. 本 Job 在每次 ArgoCD 同步后运行; ArgoCD 侧对 WasmPlugin 的 defaultConfig
 #      配了 ignoreDifferences, 回填结果不会被 selfHeal 覆盖; Vault 轮换后自动刷新。
+#
+# ⛔ [ROTATION 2026-11-06 新增]
+#   5. 网关 Virtual Keys 改为从 Secret 回填 (此前明文写死在公开仓库, 已泄露):
+#      - 真源: OCI Vault shared-secrets-vault/higress-virtual-keys-json
+#      - Secret higress-ai-secrets 的 HIGRESS_VIRTUAL_KEYS_JSON 键 (JSON 对象)
+#      - 本 Job 把它 merge-patch 进 ai-gatekeeper / finops-audit 的
+#        defaultConfig.virtual_keys; Git 中只保留 `virtual_keys: {}` 占位。
+#      - 空值保护: Secret 缺该键时跳过, 绝不清空线上现值 (避免 FAIL_CLOSE 全站 401)。
 # ==============================================================================
 apiVersion: v1
 kind: ServiceAccount
@@ -113,16 +121,38 @@ spec:
                 pairs="${pairs}\"${provider}\":\"${val}\","
               done
 
+              # ------------------------------------------------------------------
+              # A. 上游 Provider 真实 Key -> WasmPlugin/defaultConfig/upstream_keys
+              # ------------------------------------------------------------------
               if [ -z "$pairs" ]; then
-                echo "no provider requires upstream key, nothing to do"
-                exit $rc
+                echo "no provider requires upstream key, skip upstream_keys"
+              else
+                patch="{\"spec\":{\"defaultConfig\":{\"upstream_keys\":{${pairs%,}}}}}"
+                if kubectl -n "$NS" patch wasmplugin "$PLUGIN" --type merge -p "$patch" >/dev/null; then
+                  echo "WasmPlugin/$PLUGIN upstream_keys updated"
+                else
+                  echo "ERROR: patch WasmPlugin/$PLUGIN upstream_keys failed"
+                  rc=1
+                fi
               fi
 
-              patch="{\"spec\":{\"defaultConfig\":{\"upstream_keys\":{${pairs%,}}}}}"
-              if kubectl -n "$NS" patch wasmplugin "$PLUGIN" --type merge -p "$patch" >/dev/null; then
-                echo "WasmPlugin/$PLUGIN upstream_keys updated"
+              # ------------------------------------------------------------------
+              # B. [ROTATION] 网关 Virtual Keys -> 两个 WasmPlugin/defaultConfig/virtual_keys
+              # ------------------------------------------------------------------
+              vk=$(kubectl -n "$NS" get secret "$SECRET" \
+                -o jsonpath='{.data.HIGRESS_VIRTUAL_KEYS_JSON}' 2>/dev/null | base64 -d 2>/dev/null || true)
+              if [ -n "$vk" ]; then
+                for p in ai-gatekeeper finops-audit; do
+                  if kubectl -n "$NS" patch wasmplugin "$p" --type merge \
+                       -p "{\"spec\":{\"defaultConfig\":{\"virtual_keys\":${vk}}}}" >/dev/null; then
+                    echo "WasmPlugin/$p virtual_keys updated"
+                  else
+                    echo "ERROR: patch WasmPlugin/$p virtual_keys failed"
+                    rc=1
+                  fi
+                done
               else
-                echo "ERROR: patch WasmPlugin/$PLUGIN failed"
-                rc=1
+                echo "WARN: Secret/$SECRET 缺少 HIGRESS_VIRTUAL_KEYS_JSON, 跳过 virtual_keys 回填 (保留线上现值)"
               fi
+
               exit $rc
