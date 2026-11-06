@@ -143,8 +143,10 @@ spec:
                 -o jsonpath='{.data.HIGRESS_VIRTUAL_KEYS_JSON}' 2>/dev/null | base64 -d 2>/dev/null || true)
               if [ -n "$vk" ]; then
                 for p in ai-gatekeeper finops-audit; do
-                  if kubectl -n "$NS" patch wasmplugin "$p" --type merge \
-                       -p "{\"spec\":{\"defaultConfig\":{\"virtual_keys\":${vk}}}}" >/dev/null; then
+                  # 用 JSON Patch 的 add 操作"整体替换" virtual_keys 映射:
+                  #   merge patch 对 map 是合并语义, 无法删除已撤销的钥匙。
+                  if kubectl -n "$NS" patch wasmplugin "$p" --type json \
+                       -p "[{\"op\":\"add\",\"path\":\"/spec/defaultConfig/virtual_keys\",\"value\":${vk}}]" >/dev/null; then
                     echo "WasmPlugin/$p virtual_keys updated"
                   else
                     echo "ERROR: patch WasmPlugin/$p virtual_keys failed"
