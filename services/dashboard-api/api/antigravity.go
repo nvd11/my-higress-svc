@@ -181,8 +181,12 @@ func loadAccountCredentials() []StoredAccountItem {
 func fetchA6APIBilling(ctx context.Context) *A6APIBilling {
 	apiKey := os.Getenv("A6_API_KEY")
 	if apiKey == "" {
-		// 尝试从本地凭证文件或已知默认值获取
-		apiKey = "sk-jjoqdnu7lH5FG8OwHPQnYU8uHtRhWqe6yGtbSwER8UoVt5PB"
+		// 安全红线: 绝不硬编码上游真实 Key。未配置时优雅降级, 面板显示不可用。
+		return &A6APIBilling{
+			Status:      "unconfigured",
+			ErrorMsg:    "A6_API_KEY not configured",
+			LastUpdated: time.Now().UTC().Format(time.RFC3339),
+		}
 	}
 
 	result := &A6APIBilling{
