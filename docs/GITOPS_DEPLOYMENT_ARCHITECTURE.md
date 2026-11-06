@@ -205,7 +205,7 @@ ssh gateman@43.139.214.231 "echo 32565624 | sudo -S kubectl logs deploy/higress-
 # 发送测试流式请求
 curl -N -i -X POST https://higress.jppwl.asia/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-cindy-higress-20261003-888888" \
+  -H "Authorization: Bearer sk-REDACTED-see-OCI-Vault" \
   -d '{"model": "gemini-2.5-flash", "messages": [{"role": "user", "content": "ping"}], "stream": true}'
 
 # 检查 Dashboard 后端入库日志

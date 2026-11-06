@@ -61,7 +61,7 @@ spec:
   authConfig:
     keyAuth:
       # 分发给 Jayden 的真实 Virtual Key
-      key: "sk-jayden-production-key"
+      key: "sk-REDACTED-see-OCI-Vault"
   metadata:
     team: "jayden"
     cost_center: "risk-analytics"
