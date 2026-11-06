@@ -4,6 +4,22 @@
 # 架构分工:
 # 1. ai-gatekeeper (Priority 900): 内存级硬门禁 (50MB缓冲、多跳ID清洗、Token鉴权、22键模型准入/改写、/v1/models本地直答)
 # 2. finops-audit  (Priority 90):  纯净旁路计量 (真实状态码捕获、Token统计、异步写入 VictoriaLogs 与 MySQL 账本)
+#
+# ⛔ [ROTATION 2026-11-06] 安全事件: 历史上本文件曾明文写死全部 virtual_keys,
+#    而本仓库为 PUBLIC, 导致 16 把钥匙在公网裸奔 13 天。
+#    现已将 virtual_keys 全部迁出 Git:
+#      真源 = OCI Vault (shared-secrets-vault / higress-virtual-keys-json)
+#      → ExternalSecret HIGRESS_VIRTUAL_KEYS_JSON
+#      → higress-provider-key-sync Job 回填到本文档的 defaultConfig.virtual_keys
+#    保留 `virtual_keys: {}` 仅为占位; 切勿再往此文件写任何明文 key!
+#
+# 📌 [过渡期 · 2026-11-06] 全量 16 个身份采用 **双钥共存 + 名字区分**:
+#      旧钥(在用)  sk-<alias>-higress-* / sk-REDACTED-see-OCI-Vault ...
+#                  -> alias: <alias>            (沿用, 日志连续)
+#      新钥(待命)  sk-<alias>-v2-20261106-*
+#                  -> alias: <alias>-v2         (独立别名, 便于区分与灰度)
+#      → 迁移期新旧并存零中断; 各 agent 切到 v2 后, 从 map 删除旧钥即完成摘除。
+#    共 32 条 (16 旧 + 16 新)。
 # ==============================================================================
 
 # --- 第一道防线: ai-gatekeeper ---
@@ -20,26 +36,11 @@ spec:
   priority: 900
   failStrategy: FAIL_CLOSE
   imagePullPolicy: Always
-  url: oci://ghcr.io/nvd11/higress-ai-gatekeeper:cf407c11eac64568e190e92d9fe612a2caa204b6
+  url: oci://ghcr.io/nvd11/higress-ai-gatekeeper:483c2495073b98b14e9489e64bc5036d56a0e16b
   defaultConfig:
     dashboard_api_url: "http://higress-dashboard-backend.higress-system.svc.cluster.local:4000/api/v1/internal/audit-log"
-    virtual_keys:
-      "sk-cindy-higress-20261003-888888": "cindy"
-      "sk-yui-higress-20261003-777777": "yui"
-      "sk-hebe-higress-20261003-999999": "justin-higress"
-      "sk-hebe-higress-20261026-cfd8eece": "hebe-higress"
-      "sk-aurora-higress-20261011-888888": "aurora"
-      "sk-celia-higress-20261011-888888": "celia"
-      "sk-claire-higress-20261011-888888": "claire"
-      "sk-leona-higress-20261011-888888": "leona"
-      "sk-moon-higress-20261011-888888": "moon"
-      "sk-alice-higress-20261011-888888": "alice"
-      "sk-stella-higress-20261011-888888": "stella"
-      "sk-rin-higress-20261011-888888": "rin"
-      "sk-jayden-production-key": "jayden"
-      "sk-yui-40b9abf5a3612e48aa25111afbc4f813": "yui-agent"
-      "sk-rin-8f1d3c92e104b47a952a123456789abc": "rin-agent"
-      "sk-astra-higress-20261101-888888": "astra"
+    # ⚠️ 由 higress-provider-key-sync Job 从 Secret 回填 (明文钥匙永不落 Git)
+    virtual_keys: {}
 
 ---
 # --- 第二道防线: finops-audit ---
@@ -55,24 +56,9 @@ spec:
   priority: 90
   failStrategy: FAIL_OPEN
   imagePullPolicy: Always
-  url: oci://ghcr.io/nvd11/higress-finops-audit:cf407c11eac64568e190e92d9fe612a2caa204b6
+  url: oci://ghcr.io/nvd11/higress-finops-audit:483c2495073b98b14e9489e64bc5036d56a0e16b
   defaultConfig:
     dashboard_api_url: "http://higress-dashboard-backend.higress-system.svc.cluster.local:4000/api/v1/internal/audit-log"
     default_fx_rate: 7.2300
-    virtual_keys:
-      "sk-cindy-higress-20261003-888888": "cindy"
-      "sk-yui-higress-20261003-777777": "yui"
-      "sk-hebe-higress-20261003-999999": "justin-higress"
-      "sk-hebe-higress-20261026-cfd8eece": "hebe-higress"
-      "sk-aurora-higress-20261011-888888": "aurora"
-      "sk-celia-higress-20261011-888888": "celia"
-      "sk-claire-higress-20261011-888888": "claire"
-      "sk-leona-higress-20261011-888888": "leona"
-      "sk-moon-higress-20261011-888888": "moon"
-      "sk-alice-higress-20261011-888888": "alice"
-      "sk-stella-higress-20261011-888888": "stella"
-      "sk-rin-higress-20261011-888888": "rin"
-      "sk-jayden-production-key": "jayden"
-      "sk-yui-40b9abf5a3612e48aa25111afbc4f813": "yui-agent"
-      "sk-rin-8f1d3c92e104b47a952a123456789abc": "rin-agent"
-      "sk-astra-higress-20261101-888888": "astra"
+    # ⚠️ 由 higress-provider-key-sync Job 从 Secret 回填 (明文钥匙永不落 Git)
+    virtual_keys: {}

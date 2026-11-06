@@ -152,7 +152,7 @@ spec:
   authConfig:
     keyAuth:
       # 分发给业务端的真实 Virtual Key
-      key: "sk-jayden-risk-analytics-token"
+      key: "sk-REDACTED-see-OCI-Vault"
   metadata:
     team: "jayden"
     cost_center: "risk-analytics"
