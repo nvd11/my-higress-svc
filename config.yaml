@@ -162,6 +162,8 @@ model_list:
   #    (mew 对模型名大小写不敏感, 实测 DeepSeek-V4.1-Flash -> 200)
   # ⚠️ 计费按请求计点 (points_consumed), 单价未知, pricing 暂记 0
   - model_name: "DeepSeek-V4.1-Flash"
+    aliases:
+      - "deepseek-v4.1-flash-mew"
     provider: "mewapi"
     protocol: "openai"
     upstream_url: "https://api-mew.me/v1/chat/completions"
