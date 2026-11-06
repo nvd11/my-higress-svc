@@ -235,9 +235,14 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config PluginConfig) types.A
 
 func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config PluginConfig, chunk []byte, isLastChunk bool) []byte {
 	if len(chunk) > 0 {
-		rawChunk := string(chunk)
+		// 🎯 核心流式修补: 拦截并修复被官方 ai-proxy 阉割掉 tool_calls 的空壳 Chunk。
+		// 否则下游 agent(如 opencode) 永远收不到工具调用, 表现为"模型说了半句就停住"。
+		// ⚠️ 历史回归: 该修复曾在 6f1d961 接入非流式钩子 onHttpResponseBody, 但在
+		//    4b16d96 "streaming support" 重构时被遗漏, 且无测试锁定接线 -> 长期隐身。
+		//    rawContext 传此前累积的原始报文, 用于回溯被拆到其它 chunk 的调用信息。
 		prev, _ := ctx.GetContext(ctxResponseBody).(string)
-		ctx.SetContext(ctxResponseBody, prev+rawChunk)
+		chunk = finops.RepairSSEChunk(chunk, prev)
+		ctx.SetContext(ctxResponseBody, prev+string(chunk))
 	}
 
 	if isLastChunk {
