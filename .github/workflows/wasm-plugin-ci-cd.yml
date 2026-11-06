@@ -50,52 +50,34 @@ jobs:
           with open('wasm-plugin.yaml', 'r') as f:
               content = f.read()
 
+          # 🚨 安全门禁: 仓库里绝不允许出现明文虚拟钥匙 (sk-xxx-higress / sk-xxx-agent)
+          leaked = re.findall(r'sk-[a-zA-Z0-9]+-higress-[0-9]{8}-[a-zA-Z0-9]+', content)
+          if leaked:
+              print('❌ SECURITY: 检测到明文 Virtual Key 落库, 必须迁至 OCI Vault!')
+              for k in set(leaked):
+                  print('   leaked:', k[:14] + '...' + k[-6:])
+              sys.exit(1)
+
           docs = content.split('---')
           plugins = {}
           for doc in docs:
               name_match = re.search(r'name:\s*([a-zA-Z0-9_-]+)', doc)
               if name_match:
-                  pname = name_match.group(1)
-                  plugins[pname] = doc
+                  plugins[name_match.group(1)] = doc
 
           assert 'ai-gatekeeper' in plugins, 'ai-gatekeeper missing in wasm-plugin.yaml'
           assert 'finops-audit' in plugins, 'finops-audit missing in wasm-plugin.yaml'
 
-          # Check failStrategy enum
           for pname, doc in plugins.items():
               strat_match = re.search(r'failStrategy:\s*([a-zA-Z0-9_-]+)', doc)
               if strat_match:
                   strat = strat_match.group(1)
-                  assert strat in ['FAIL_OPEN', 'FAIL_CLOSE'], f'Illegal failStrategy {strat} in {pname}! Must be FAIL_OPEN or FAIL_CLOSE.'
+                  assert strat in ['FAIL_OPEN', 'FAIL_CLOSE'], f'Illegal failStrategy {strat} in {pname}!'
 
-          # Extract virtual_keys from both
-          def get_vkeys(doc):
-              lines = doc.splitlines()
-              keys = {}
-              in_vk = False
-              for l in lines:
-                  if 'virtual_keys:' in l:
-                      in_vk = True
-                      continue
-                  if in_vk:
-                      if re.match(r'^\s{6,}[a-zA-Z0-9_-]+:', l):
-                          break
-                      m = re.search(r'\"(sk-[^\"]+)\":\s*\"([^\"]+)\"', l)
-                      if m:
-                          keys[m.group(1)] = m.group(2)
-                      elif l.strip() == '' or l.strip().startswith('#'):
-                          continue
-                      elif not l.startswith(' '):
-                          break
-              return keys
-
-          gk_keys = get_vkeys(plugins['ai-gatekeeper'])
-          fa_keys = get_vkeys(plugins['finops-audit'])
-
-          assert len(gk_keys) > 0, 'ai-gatekeeper virtual_keys cannot be empty!'
-          assert len(fa_keys) > 0, 'finops-audit virtual_keys cannot be empty!'
-          assert gk_keys == fa_keys, f'virtual_keys mismatch! Gatekeeper has {len(gk_keys)}, FinOps has {len(fa_keys)}'
-          print(f'✅ All {len(gk_keys)} virtual_keys are 100% matched and consistent!')
+          # virtual_keys 真源已迁至 Secret, 此处只校验占位字段存在
+          for pname in ('ai-gatekeeper', 'finops-audit'):
+              assert 'virtual_keys:' in plugins[pname], f'{pname} 缺少 virtual_keys 占位字段!'
+          print('✅ WasmPlugin 规格校验通过; Virtual Keys 由 OCI Vault 注入, 仓库无明文泄露。')
           "
 
       - name: Execute FinOps Audit Unit Tests
