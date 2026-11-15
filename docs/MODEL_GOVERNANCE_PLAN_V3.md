@@ -22,6 +22,11 @@
 >      现存生产插件 `plugins/finops-audit/main.go:68` 早就常态化配置了 `ctx.SetRequestBodyBufferLimit(50MB)`，近 7 天生产中已有 **1,097 次 > 1MB 的超长大报文（含单次 3.54MB / 92.7万 Tokens）** 稳定穿透、被完整读取并成功归档至 VictoriaLogs 与 Redis！
 >      底层 50MB 缓冲机制与全量 Payload 读取能力**已是 100% 验证过的线上成熟事实资产**，绝无必要“脱裤子放屁”再做独立的 V1~V4 阶段；
 >   2. **验证断言直接并入 P0 单测与 P1 集成**：原 V1~V4 的技术断言直接收敛至 **P0 单元测试（大报文、改头注入、逗号 ID 过滤）**，消灭过度工程，直开 P0 全面交付。
+> - **v3.7（2026-11-15 CI 硬化 · 兑现 G8）**：
+>   1. `test` job 改为「先重新生成、再 `git diff --exit-code`」的**真护栏**：产物不新鲜即飘红，不再依赖 bot 自动回写；
+>   2. GitOps 回写收敛为**只钉镜像 SHA**，生成物必须随 PR 提交，消除「新配置 + 旧产物」的同步窗口；
+>   3. 新增全仓密钥扫描、post-deploy 冒烟契约（`scripts/smoke.sh`）、镜像 cosign keyless 签名、依赖 Dependabot；
+>   4. `ingress.yaml` 移除自相矛盾的 catch-all 兜底路由，统一为 **deny-by-default（未打标 → 404）**。
 
 ---
 
@@ -417,7 +422,7 @@ gantt
 | **G5** | `GET /v1/models` 仅暴露 10 个主名 | 请求 `/v1/models`，断言返回 `data` 长度恰好为 10，别名与上游未声明模型 100% 隐藏。 |
 | **G6** | 3.54MB 超长上下文平稳穿透 | 发送 92.7万 Tokens 的超大 Prompt，门卫不报 413，上游正常流式响应。 |
 | **G7** | 阻断请求留痕可审计 | 触发 400/401 阻断后，`dashboard-api` 或审计日志能按 `request_id` 检索到阻断事件与原因。 |
-| **G8** | CI 防漂移双产物指纹锁死 | 修改 `config.yaml` 但**不重新生成**生成物 → 流水线必须立即飘红阻断；`pricing_gen.go` 与门禁名单生成物的 sha256 指纹必须与当前 `config.yaml` 一致。 |
+| **G8** | CI 防漂移指纹锁死 | 修改 `config.yaml` 但**不重新生成**生成物 → CI 在「重新生成之后」执行 `git diff --exit-code`，立即飘红阻断（v3.7 已落地，见 `wasm-plugin-ci-cd.yml` 的 Drift Guard 步骤）。 |
 
 ---
 

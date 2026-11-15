@@ -1,5 +1,10 @@
 # AI 网关模型治理改造方案
 
+> ⚠️ **本文档已被 [`MODEL_GOVERNANCE_PLAN_V3.md`](./MODEL_GOVERNANCE_PLAN_V3.md) 取代（2026-11-15 加注）**。
+> 这里保留的是「路线 C：官方 `ai-proxy` + `*` 闸门」的评审记录与实测证据链。
+> 主人最终裁决走 **路线乙：自研 `ai-gatekeeper`**，原因是路线 C 借上游拒收、
+> 污染上游日志、`/v1/models` 不可控。请勿按本文档实施。
+
 > **目标**：让 `config.yaml` 成为**模型清单（model list）与计费价目**的唯一标准（single source of truth），
 > 通过 Higress 官方 `ai-proxy` 插件的 `modelMapping` 落地准入、别名与改写，废除"网关纯透传、上游 143 个模型全放行"的现状。
 >

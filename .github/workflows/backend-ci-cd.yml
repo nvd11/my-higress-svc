@@ -11,14 +11,22 @@ on:
       - "v*"
   workflow_dispatch:
 
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: nvd11/my-higress-dashboard-backend
+  # 覆盖率下限 (当前实测 55.6%, 先设 50% 防回退, 后续逐步抬升)
+  MIN_COVERAGE: "50.0"
 
 jobs:
   test:
-    name: Run Backend Unit Tests
+    name: Run Backend Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -29,18 +37,39 @@ jobs:
           go-version: '1.26'
           cache-dependency-path: services/dashboard-api/go.sum
 
-      - name: Execute Backend Tests with Coverage
+      - name: Go Vet
         run: |
           cd services/dashboard-api
-          CGO_ENABLED=0 go test -v -cover ./api ./config ./db ./logic ./redis ./vlogs
+          CGO_ENABLED=0 go vet ./...
+
+      # 用 ./... 而不是硬编码包列表: 新增包自动纳入测试, 改目录名不再误报
+      - name: Execute Backend Tests with Coverage
+        run: |
+          set -euo pipefail
+          cd services/dashboard-api
+          CGO_ENABLED=0 go test -v -covermode=atomic -coverprofile=coverage.out ./...
+          total=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | tr -d '%')
+          echo "total coverage: ${total}% (min ${MIN_COVERAGE}%)" | tee -a "$GITHUB_STEP_SUMMARY"
+          awk -v t="$total" -v m="$MIN_COVERAGE" 'BEGIN { exit (t+0 >= m+0) ? 0 : 1 }' || {
+            echo "::error::覆盖率 ${total}% 低于阈值 ${MIN_COVERAGE}%"; exit 1;
+          }
+
+      - name: Upload Coverage Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: services/dashboard-api/coverage.out
+          retention-days: 14
 
   build-and-push:
-    name: Build & Push Image
+    name: Build, Sign & Push Image
     needs: test
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
       packages: write
+      id-token: write   # cosign keyless (OIDC)
 
     steps:
       - name: Check out source
@@ -72,6 +101,7 @@ jobs:
         with:
           context: services/dashboard-api
           file: services/dashboard-api/Dockerfile
+          # 生产只调度到 OCI ARM64 节点 (free-arm-vm), 因此只出 arm64。
           platforms: linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
@@ -81,21 +111,34 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign Image (keyless)
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${REGISTRY}/${IMAGE_NAME}@${IMAGE_DIGEST}"
+
       - name: Record manifest digest
         run: |
           echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
           echo "Digest: ${{ steps.build.outputs.digest }}"
           {
-            echo "### Published Higress Dashboard Image"
+            echo "### Published Higress Dashboard Backend Image"
             echo
             echo '- Repository: `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}`'
-            echo '- Platforms: `linux/amd64`, `linux/arm64`'
+            echo '- Platform: `linux/arm64` (production node: free-arm-vm)'
+            echo '- Signed: `cosign keyless`'
             echo '- Manifest digest: `${{ steps.build.outputs.digest }}`'
             echo '- Commit: `${{ github.sha }}`'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # 只在 main 分支 push 时派发; tag (v*) 构建绝不改写生产清单,
+      # 避免用旧 commit 的镜像覆盖线上 digest。
       - name: Update GitOps image digest in my-argocd-manifests
-        if: ${{ vars.ENABLE_GITOPS_DIGEST_DISPATCH == 'true' }}
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         env:
           DISPATCH_TOKEN: ${{ secrets.ARGOCD_MANIFESTS_DISPATCH_TOKEN }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
@@ -103,7 +146,7 @@ jobs:
           set -euo pipefail
 
           if [[ -z "$DISPATCH_TOKEN" ]]; then
-            echo "ARGOCD_MANIFESTS_DISPATCH_TOKEN is required when GitOps dispatch is enabled" >&2
+            echo "::error::ARGOCD_MANIFESTS_DISPATCH_TOKEN 未配置, 镜像已推送但清单不会更新"
             exit 1
           fi
           if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then

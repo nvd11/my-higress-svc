@@ -162,4 +162,32 @@ spec:
                 echo "WARN: Secret/$SECRET 缺少 HIGRESS_VIRTUAL_KEYS_JSON, 跳过 virtual_keys 回填 (保留线上现值)"
               fi
 
+              # ------------------------------------------------------------------
+              # C. 回读校验 (关键!): ai-gatekeeper 是 FAIL_CLOSE, virtual_keys 为空
+              #    意味着每一个请求都会 401 —— 必须在这里显式失败, 而不是等用户报障。
+              # ------------------------------------------------------------------
+              for p in ai-gatekeeper finops-audit; do
+                n=$(kubectl -n "$NS" get wasmplugin "$p" \
+                  -o go-template='{{len .spec.defaultConfig.virtual_keys}}' 2>/dev/null || echo 0)
+                if [ "${n:-0}" -lt 1 ]; then
+                  echo "FATAL: WasmPlugin/$p 的 virtual_keys 为空 (FAIL_CLOSE 下将导致全站 401)"
+                  rc=1
+                else
+                  echo "WasmPlugin/$p virtual_keys 回读校验通过 (${n} 把钥匙)"
+                fi
+              done
+
+              if [ -n "${pairs}" ]; then
+                for p in ai-gatekeeper; do
+                  n=$(kubectl -n "$NS" get wasmplugin "$p" \
+                    -o go-template='{{len .spec.defaultConfig.upstream_keys}}' 2>/dev/null || echo 0)
+                  if [ "${n:-0}" -lt 1 ]; then
+                    echo "FATAL: WasmPlugin/$p 的 upstream_keys 为空 (上游将全部 401)"
+                    rc=1
+                  else
+                    echo "WasmPlugin/$p upstream_keys 回读校验通过 (${n} 个 provider)"
+                  fi
+                done
+              fi
+
               exit $rc

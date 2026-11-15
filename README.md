@@ -16,7 +16,7 @@
 | 对比维度 | 原 Python LiteLLM 网关 | 次世代 Higress AI Gateway | 提升收益 |
 | :--- | :---: | :---: | :---: |
 | **底层内核语言** | Python 3.12 (解释执行 / GIL 瓶颈) | **C++ 20 (Envoy 原生内存池 / SIMD 优化)** | 运行效率提升一个数量级 |
-| **扩展插件机制** | Python Callback 拦截器 | **WebAssembly (TinyGo 编译的 `.wasm` 字节码)** | 高性能沙箱隔离，零 GC 停顿 |
+| **扩展插件机制** | Python Callback 拦截器 | **WebAssembly (Go 1.24+ `wasip1` 编译的 `.wasm` 字节码)** | 高性能沙箱隔离，零 GC 停顿 |
 | **首字延迟开销 (TTFT)** | 15ms ~ 50ms 代理损耗 | **< 1ms** | 降低 **95%+** |
 | **超长上下文流式响应** | 易因阻塞接收窗口导致超时断线 | **零内存拷贝流式透传（Zero-Copy SSE）** | 彻底根治长上下文卡壳 |
 | **常驻内存开销** | 400MB ~ 2.0GB (大报文极易爆仓) | **< 80MB** | 内存占用缩减 **90%+** |
@@ -86,27 +86,36 @@
 ```text
 my-higress-svc/
 ├── README.md                   # 项目工程说明书（当前文件）
-├── .gitignore                  # Git 忽略规则
-├── .github/workflows/          # 自动化 CI/CD 流水线 (多架构镜像构建与发布)
-│   ├── backend-ci-cd.yml       # 纯 Go 后端全量单测与 Docker 构建
-│   ├── frontend-ci-cd.yml      # React 18 前端 SPA 自动化构建
-│   └── ci.yml                  # Wasm-Go 插件编译流水线
-├── ai-proxy.yaml               # 核心大模型映射、Google 直连与 Fallback 规则 (WasmPlugin)
-├── hermes-passthrough.yaml     # 本地自主 Agent (Yui/Rin) 裸流无损直通路由
-├── mcp-bridge.yaml             # McpBridge 外部大模型上游 DNS 解析与连接池
-├── ingress.yaml                # Higress Ingress 业务入口绑定配置
-├── values.yaml                 # 定制化 Helm Values (ARM64 调度与 Envoy 800Mi 调优)
+├── config.yaml                 # ★ 唯一真源：模型清单 / 别名 / 渠道 / 计费价目
+├── wasm-plugin.yaml            # 双 Wasm 插件编排 (ai-gatekeeper + finops-audit)
+├── ingress.yaml                # [生成物] 每个 provider 一条精确匹配路由, 无 catch-all
+├── mcp-bridge.yaml             # [生成物] 上游 DNS registry 与连接池
+├── key-sync-job.yaml           # PostSync Hook: Vault → Secret → WasmPlugin 回填 + 回读校验
 ├── secrets.yaml                # OCI Vault 自动化 ExternalSecret 凭证声明
+├── values.yaml                 # 定制化 Helm Values (ARM64 调度与 Envoy 调优)
+├── .github/
+│   ├── workflows/
+│   │   ├── wasm-plugin-ci-cd.yml   # 单测 + 漂移护栏 + 密钥扫描 + 编译签名 + GitOps 钉 SHA
+│   │   ├── backend-ci-cd.yml       # Go vet/单测/覆盖率门禁 + 镜像签名 + Digest Dispatch
+│   │   └── frontend-ci-cd.yml      # tsc + 构建 + 镜像签名 + Digest Dispatch
+│   └── dependabot.yml          # gomod / npm / actions / docker 依赖自动升级
+├── scripts/
+│   ├── secret-scan.py          # 全仓明文密钥扫描 (CI 强制)
+│   └── smoke.sh                # 部署后契约冒烟 (401 / 400 / models=11 / 200)
 ├── docs/
-│   ├── REQUIREMENTS.md         # 详细需求规格说明书 (痛点与功能矩阵)
-│   ├── DELIVERY_GOALS.md       # 四阶段交付目标与实施里程碑计划
-│   ├── ARCHITECTURE.md         # 核心技术架构设计书 (方案 A + Wasm 数据面 + 前后端洁癖解耦)
-│   ├── COMPATIBILITY.md        # 资产兼容契约手册 (MySQL DDL / VictoriaLogs 协议 / Redis 缓存)
-│   └── DEPLOYMENT_GUIDE.md     # 生产环境全链路部署与实施实操指南
-├── plugins/                    # 自研 Wasm-Go 扩展插件源码
-│   └── finops-audit/           # 财务审计与 VictoriaLogs 异步投递插件 (单测 100% PASS)
-├── frontend/                   # 独立 React 18 + Vite + Tailwind 前端工程 (Nginx 独立镜像 <15MB)
-└── services/dashboard-api/     # 纯 Go 重构的 RESTful JSON 后端 (单测覆盖率 83%+, 镜像 <30MB)
+│   ├── REQUIREMENTS.md         # 需求规格说明书 (v1.0 历史基线)
+│   ├── DELIVERY_GOALS.md       # 四阶段交付目标与里程碑 (v1.0 历史基线)
+│   ├── ARCHITECTURE.md         # 核心技术架构设计书 (v1.0 历史基线)
+│   ├── COMPATIBILITY.md        # 资产兼容契约手册 (MySQL DDL / VictoriaLogs / Redis)
+│   ├── DEPLOYMENT_GUIDE.md     # 生产环境部署实操指南
+│   ├── GITOPS_DEPLOYMENT_ARCHITECTURE.md  # 双集群 GitOps 与 CI/CD 规范
+│   ├── MODEL_GOVERNANCE_PLAN.md           # 治理方案 v1 (路线 C, 已被 V3 取代)
+│   └── MODEL_GOVERNANCE_PLAN_V3.md        # ★ 治理方案 v3.7 (路线乙 ai-gatekeeper, 现行)
+├── plugins/
+│   ├── ai-gatekeeper/          # 第一道硬门禁 (鉴权 / 准入 / 别名改写 / models 直出)
+│   └── finops-audit/           # 第二道旁路审计 (真实状态码 / Token 计量 / 三路落库)
+├── frontend/                   # React 18 + Vite + Tailwind (Nginx <15MB)
+└── services/dashboard-api/     # 纯 Go RESTful 后端 (查询 + 三位一体落库)
 ```
 
 ---

@@ -1,6 +1,7 @@
 package finops
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -90,6 +91,59 @@ func TestPricingInvariants(t *testing.T) {
 		if p.CompletionPer1M < p.PromptPer1M {
 			t.Errorf("%s: 输出价 %v 低于输入价 %v (疑似写反)", name, p.CompletionPer1M, p.PromptPer1M)
 		}
+	}
+}
+
+// TestDeepSeekV41Flash1017Pricing 守卫 2026-11-15 由主人提供的上游人民币价目的
+// 折算正确性。上游价目 (CNY / 1M tokens):
+//
+//	输入 ¥0.048038 · 输出 ¥0.192151 · 缓存读 ¥0.000961
+//
+// 网关统一按 fx=7.23 折算为美元入表。这里独立于生成器重算一遍, 防止
+// 手抄错误 (少一位小数/漏除汇率/把输出价写成输入价)。
+func TestDeepSeekV41Flash1017Pricing(t *testing.T) {
+	const fx = 7.23
+	cases := []struct {
+		name string
+		cny  float64
+		got  func(ModelPricing) float64
+	}{
+		{"prompt", 0.048038, func(p ModelPricing) float64 { return p.PromptPer1M }},
+		{"completion", 0.192151, func(p ModelPricing) float64 { return p.CompletionPer1M }},
+		{"cache_read", 0.000961, func(p ModelPricing) float64 { return p.CacheReadPer1M }},
+	}
+
+	p, ok := GetModelPricing("deepseek-v4.1-flash-1017")
+	if !ok {
+		t.Fatal("deepseek-v4.1-flash-1017 未命中价目表")
+	}
+	if p.Canonical != "deepseek-v4.1-flash-1017" {
+		t.Errorf("Canonical = %q", p.Canonical)
+	}
+	if p.UpstreamModel != "deepseek-v4.1-flash-1017" {
+		t.Errorf("UpstreamModel = %q", p.UpstreamModel)
+	}
+	if p.Provider != "a6api" {
+		t.Errorf("Provider = %q", p.Provider)
+	}
+
+	for _, c := range cases {
+		want := c.cny / fx
+		if got := c.got(p); math.Abs(got-want) > 1e-6 {
+			t.Errorf("%s 价 = %.9f, 期望 ¥%.6f / %.2f = %.9f", c.name, got, c.cny, fx, want)
+		}
+	}
+
+	// 成本口径: 1M 输入 + 1M 输出 (无缓存命中) 应为 0.006644 + 0.026577 USD
+	usd, cny, declared := CalculateCost("deepseek-v4.1-flash-1017", 1_000_000, 1_000_000, 0, fx)
+	if !declared {
+		t.Fatal("CalculateCost 报未纳管")
+	}
+	if want := 0.033221; math.Abs(usd-want) > 1e-6 {
+		t.Errorf("cost_usd = %.9f, 期望 %.6f", usd, want)
+	}
+	if want := 0.033221 * fx; math.Abs(cny-want) > 1e-6 {
+		t.Errorf("cost_cny = %.9f, 期望 %.6f", cny, want)
 	}
 }
 
