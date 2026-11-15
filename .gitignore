@@ -29,6 +29,8 @@ tmp/
 .env
 *.local.yaml
 sa-key.json
+# 本地密钥轮换工作目录 (含明文 key, 仅存在于操作机, 严禁入库)
+.rotation-*/
 
 # Frontend
 frontend/node_modules/

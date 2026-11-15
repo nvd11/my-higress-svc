@@ -317,15 +317,9 @@ spec:
 }
 
 func generateIngress(sumHash string, providers []providerRoute) string {
-	// 兜底目标 = 第一个集群内自建上游 (自建代理), 没有则不生成兜底路由
-	var fallback *providerRoute
-	for i := range providers {
-		if isClusterInternal(providers[i].Host) {
-			fallback = &providers[i]
-			break
-		}
-	}
-
+	// 严格 deny-by-default: 本函数**不生成任何 catch-all 兜底路由**。
+	// 未携带 (或携带未知) x-higress-llm-provider 的请求, Envoy 无路由可匹配,
+	// 直接返回 404 —— 绝不允许把请求静默串流到其它厂商 (历史事故防线)。
 	var b strings.Builder
 	fmt.Fprintf(&b, `# ==============================================================================
 # Higress Ingress 业务入口多上游分发配置 (以 config.yaml 为唯一标准)
@@ -387,44 +381,15 @@ metadata:
                 kind: McpBridge
                 name: default
 `)
-		if i != len(providers)-1 || fallback != nil {
+		if i != len(providers)-1 {
 			b.WriteString("---\n")
 		}
 	}
 
-	// ── 兜底路由: 仅用于「网关自身未被正确打标」的极端情况 ─────────────────────
-	// 指向集群内自建代理 (只服务 Antigravity/Gemini), 该代理已硬性拒绝任何
-	// 非 Gemini 模型并返回 400 —— 因此即使打标失败也是**响亮报错**,
-	// 绝不会像历史事故那样把 A6 请求静默中继到别家厂商。
-	if fallback != nil {
-		fmt.Fprintf(&b, `# ── 兜底: 未打标流量 → %s (只服务 Antigravity, 其它模型一律 400)
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: higress-ai-ingress
-  namespace: higress-system
-  labels:
-    app.kubernetes.io/name: higress-ai-gateway
-    app.kubernetes.io/part-of: my-higress-svc
-    higress.io/llm-provider: fallback
-  annotations:
-    higress.io/backend-protocol: %s
-    higress.io/destination: %s.dns
-    higress.io/upstream-vhost: %s
-spec:
-  ingressClassName: higress
-  rules:
-    - http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              resource:
-                apiGroup: networking.higress.io
-                kind: McpBridge
-                name: default
-`, fallback.Name, strings.ToUpper(fallback.Scheme), fallback.Name, fallback.Host)
-	}
+	// ── 注意: 此处故意不生成 catch-all / 兜底 Ingress ─────────────────────────
+	// 历史版本曾把未打标流量兜底到集群内自建代理, 与"无 catch-all"的架构约定
+	// 自相矛盾, 且一旦门卫异常 (FAIL_OPEN / 新 provider 漏配) 就会把 A6 的
+	// 请求悄悄送到别家厂商。现在统一为: 没有匹配的 provider 路由 = 404。
 
 	return b.String()
 }

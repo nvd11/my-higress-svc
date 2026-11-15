@@ -1,5 +1,9 @@
 # my-higress-svc 生产环境全链路部署与实施实操指南 (Deployment Guide)
 
+> ⚠️ **文档状态（2026-11-15）**：v1.1 历史基线（描述 `ai-proxy.yaml` 时代）。
+> 现行路由由 `config.yaml` 经 `pricinggen` 生成，插件为 `ai-gatekeeper` + `finops-audit`；
+> 部署与 CI/CD 请以 [`GITOPS_DEPLOYMENT_ARCHITECTURE.md`](./GITOPS_DEPLOYMENT_ARCHITECTURE.md) 为准。
+
 > **文档版本**：v1.1.0 · **修订日期**：2026-10-03 · **核心主笔**：Cindy (主人贴身大秘❤️)  
 > **核心原则**：**模型与路由配置先行**（杜绝启动即 404 空壳）；全面对齐现有 `litellm-svc` 基础设施（基于 OCI Vault 自动化注入凭证 + ArgoCD 一键交付至 `free-arm-vm` ARM64 K3s 节点）。
 

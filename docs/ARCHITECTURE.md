@@ -1,5 +1,10 @@
 # my-higress-svc 核心技术架构设计书 (Architecture Design)
 
+> ⚠️ **文档状态（2026-11-15）**：本文是 v1.0 方案基线（当时的 `ai-proxy` + TinyGo 路线）。
+> 现行实现已演进为 **`config.yaml` 唯一真源 + `ai-gatekeeper` 门卫 + `finops-audit` 旁路**，
+> 编译工具链为 **Go 1.24+ `wasip1`**。最新权威方案请以
+> [`MODEL_GOVERNANCE_PLAN_V3.md`](./MODEL_GOVERNANCE_PLAN_V3.md) 与仓库实际清单为准。
+
 > **文档版本**：v1.0.0 · **编制时间**：2026-10-03 · **核心主笔**：Cindy (主人贴身大秘❤️)  
 > **战略目标**：以 Envoy C++ 为高性能内核，构建微秒级延迟、兼具财务审计与大报文归档的高可用 AI Gateway。
 
