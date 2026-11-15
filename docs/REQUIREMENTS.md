@@ -1,5 +1,9 @@
 # my-higress-svc 需求规格说明书 (Requirements Specification)
 
+> ⚠️ **文档状态（2026-11-15）**：v1.0 历史基线（含 `ai-proxy` / TinyGo 等早期选型）。
+> 现行模型治理与准入方案见 [`MODEL_GOVERNANCE_PLAN_V3.md`](./MODEL_GOVERNANCE_PLAN_V3.md)，
+> 模型清单与价目的唯一真源是仓库根目录 `config.yaml`。
+
 > **文档版本**：v1.0.0 · **创建日期**：2026-09-28 · **核心维护者**：Jason & Cindy ❤️  
 > **所属领域**：云原生大模型接入网关 (AI Gateway) / FinOps 财务审计 / 高性能流量代理
 

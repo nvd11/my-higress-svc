@@ -24,61 +24,99 @@ concurrency:
   group: wasm-plugin-ci-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  FINOPS_IMAGE: ghcr.io/nvd11/higress-finops-audit
+  GATEKEEPER_IMAGE: ghcr.io/nvd11/higress-ai-gatekeeper
+
 jobs:
   test:
-    name: Run Unit Tests & Drift Guard
+    name: Unit Tests, Drift Guard & Security Scan
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          # 与 backend (services/dashboard-api) 统一为 1.26, 消除工具链双版本
+          go-version: '1.26'
+          cache-dependency-path: |
+            plugins/finops-audit/go.sum
+            plugins/ai-gatekeeper/go.sum
 
       - name: Regenerate Pricing & Gatekeeper Models from config.yaml
-        run: |
-          cd plugins/finops-audit
-          CGO_ENABLED=0 go run internal/pricinggen/main.go -config ../../config.yaml -out pkg/finops/pricing_gen.go -gatekeeper-out ../ai-gatekeeper/models_gen.go -mcpbridge-out ../../mcp-bridge.yaml -ingress-out ../../ingress.yaml
+        run: bash scripts/gen-pricing.sh
 
-      - name: Validate WasmPlugin Specifications & VirtualKeys Consistency
+      # 🚨 真正的漂移护栏 (G8):
+      # 重新生成是"无副作用函数"。若产物是新鲜的, 重新生成不应改变任何字节。
+      # 因此这里必须在【生成之后】比较工作区与已提交版本 —— 有 diff 就说明
+      # 有人改了 config.yaml 却没提交生成物 (或手改了生成物), 立刻飘红。
+      # 注意 `git add -N`: 新生成的未跟踪文件默认对 `git diff` 不可见。
+      - name: Drift Guard (generated artifacts must be committed)
         run: |
-          python3 -c "
+          set -euo pipefail
+          FILES="pkg/finops/pricing_gen.go ../ai-gatekeeper/models_gen.go ../../mcp-bridge.yaml ../../ingress.yaml"
+          cd plugins/finops-audit
+          # shellcheck disable=SC2086
+          git add -N $FILES
+          if ! git diff --exit-code -- $FILES; then
+            echo "::error::生成物与 config.yaml 不同步。请在本地执行:"
+            echo "::error::  bash scripts/gen-pricing.sh"
+            echo "::error::并把 pricing_gen.go / models_gen.go / mcp-bridge.yaml / ingress.yaml 一并提交。"
+            exit 1
+          fi
+          echo "✅ 生成物与 config.yaml 一致 (sha256 指纹匹配)"
+
+      - name: Secret Scan (whole repo)
+        run: python3 scripts/secret-scan.py
+
+      - name: Validate WasmPlugin Specifications
+        run: |
+          python3 - <<'PY'
           import re, sys
 
-          with open('wasm-plugin.yaml', 'r') as f:
+          with open('wasm-plugin.yaml') as f:
               content = f.read()
-
-          # 🚨 安全门禁: 仓库里绝不允许出现明文虚拟钥匙 (sk-xxx-higress / sk-xxx-agent)
-          leaked = re.findall(r'sk-[a-zA-Z0-9]+-higress-[0-9]{8}-[a-zA-Z0-9]+', content)
-          if leaked:
-              print('❌ SECURITY: 检测到明文 Virtual Key 落库, 必须迁至 OCI Vault!')
-              for k in set(leaked):
-                  print('   leaked:', k[:14] + '...' + k[-6:])
-              sys.exit(1)
 
           docs = content.split('---')
           plugins = {}
           for doc in docs:
-              name_match = re.search(r'name:\s*([a-zA-Z0-9_-]+)', doc)
-              if name_match:
-                  plugins[name_match.group(1)] = doc
+              m = re.search(r'name:\s*([a-zA-Z0-9_-]+)', doc)
+              if m:
+                  plugins.setdefault(m.group(1), []).append(doc)
 
-          assert 'ai-gatekeeper' in plugins, 'ai-gatekeeper missing in wasm-plugin.yaml'
-          assert 'finops-audit' in plugins, 'finops-audit missing in wasm-plugin.yaml'
+          for name in ('ai-gatekeeper', 'finops-audit'):
+              assert name in plugins, f'{name} missing in wasm-plugin.yaml'
+              assert len(plugins[name]) == 1, f'{name} 重复定义'
+              doc = plugins[name][0]
+              strat = re.search(r'failStrategy:\s*([A-Za-z0-9_-]+)', doc)
+              assert strat, f'{name} 缺少 failStrategy'
+              assert strat.group(1) in ('FAIL_OPEN', 'FAIL_CLOSE'), \
+                  f'Illegal failStrategy {strat.group(1)} in {name}'
+              assert 'virtual_keys:' in doc, f'{name} 缺少 virtual_keys 占位字段'
+              url = re.search(r'url:\s*(oci://\S+)', doc)
+              assert url, f'{name} 缺少 image url'
+              ref = url.group(1)
+              assert ':latest' not in ref, \
+                  f'{name} 禁止使用 :latest, 必须钉死 commit SHA (可回滚/可追溯)'
+              if '@sha256:' in ref:
+                  assert re.search(r'@sha256:[a-f0-9]{64}$', ref), \
+                      f'{name} digest 格式非法'
+              else:
+                  tag = ref.rsplit(':', 1)[-1]
+                  assert re.fullmatch(r'[a-f0-9]{40}', tag), \
+                      f'{name} image tag 必须是 40 位 commit SHA, 实际为 {tag!r}'
 
-          for pname, doc in plugins.items():
-              strat_match = re.search(r'failStrategy:\s*([a-zA-Z0-9_-]+)', doc)
-              if strat_match:
-                  strat = strat_match.group(1)
-                  assert strat in ['FAIL_OPEN', 'FAIL_CLOSE'], f'Illegal failStrategy {strat} in {pname}!'
+          print('✅ WasmPlugin 规格校验通过 (failStrategy 合法 / virtual_keys 占位存在 / 镜像钉死 SHA)')
+          PY
 
-          # virtual_keys 真源已迁至 Secret, 此处只校验占位字段存在
-          for pname in ('ai-gatekeeper', 'finops-audit'):
-              assert 'virtual_keys:' in plugins[pname], f'{pname} 缺少 virtual_keys 占位字段!'
-          print('✅ WasmPlugin 规格校验通过; Virtual Keys 由 OCI Vault 注入, 仓库无明文泄露。')
-          "
+      - name: Go Vet
+        run: |
+          (cd plugins/finops-audit && CGO_ENABLED=0 go vet ./...)
+          (cd plugins/ai-gatekeeper && CGO_ENABLED=0 go vet ./...)
 
       - name: Execute FinOps Audit Unit Tests
         run: |
@@ -91,12 +129,13 @@ jobs:
           CGO_ENABLED=0 go test -v ./...
 
   build-and-deploy:
-    name: Build, Publish & GitOps Deploy Wasm Plugins
+    name: Build, Publish, Sign & GitOps Deploy Wasm Plugins
     runs-on: ubuntu-latest
     needs: test
     permissions:
       contents: write
       packages: write
+      id-token: write   # cosign keyless (OIDC)
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -106,13 +145,18 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.26'
+          cache-dependency-path: |
+            plugins/finops-audit/go.sum
+            plugins/ai-gatekeeper/go.sum
 
-      - name: Compile Native Wasm Binaries via Go 1.24 wasip1
+      # 不再重新生成: 只编译"已提交且已被 test job 校验过"的生成物,
+      # 保证线上镜像与 Git 中记录的产物逐字节一致 (原子发布)。
+      - name: Compile Native Wasm Binaries via Go wasip1
         run: |
+          set -euo pipefail
           echo "Compiling finops-audit..."
           cd plugins/finops-audit
-          CGO_ENABLED=0 go run internal/pricinggen/main.go -config ../../config.yaml -out pkg/finops/pricing_gen.go -gatekeeper-out ../ai-gatekeeper/models_gen.go -mcpbridge-out ../../mcp-bridge.yaml -ingress-out ../../ingress.yaml
           CGO_ENABLED=0 GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -buildvcs=false -o plugin.wasm .
           echo "finops-audit Wasm: $(ls -lh plugin.wasm | awk '{print $5}')"
 
@@ -142,45 +186,92 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and Push finops-audit Wasm OCI Image
+        id: finops
         if: github.ref == 'refs/heads/main'
         uses: docker/build-push-action@v6
         with:
           context: plugins/finops-audit
           file: plugins/finops-audit/Dockerfile
           push: true
+          provenance: true
+          sbom: true
           tags: |
-            ghcr.io/nvd11/higress-finops-audit:latest
-            ghcr.io/nvd11/higress-finops-audit:${{ github.sha }}
+            ${{ env.FINOPS_IMAGE }}:latest
+            ${{ env.FINOPS_IMAGE }}:${{ github.sha }}
 
       - name: Build and Push ai-gatekeeper Wasm OCI Image
+        id: gatekeeper
         if: github.ref == 'refs/heads/main'
         uses: docker/build-push-action@v6
         with:
           context: plugins/ai-gatekeeper
           file: plugins/ai-gatekeeper/Dockerfile
           push: true
+          provenance: true
+          sbom: true
           tags: |
-            ghcr.io/nvd11/higress-ai-gatekeeper:latest
-            ghcr.io/nvd11/higress-ai-gatekeeper:${{ github.sha }}
+            ${{ env.GATEKEEPER_IMAGE }}:latest
+            ${{ env.GATEKEEPER_IMAGE }}:${{ github.sha }}
 
-      - name: GitOps Write-Back (Update wasm-plugin.yaml & Generated Go Code)
+      - name: Install Cosign
+        if: github.ref == 'refs/heads/main'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign Published Images (keyless)
+        if: github.ref == 'refs/heads/main'
+        env:
+          FINOPS_DIGEST: ${{ steps.finops.outputs.digest }}
+          GATEKEEPER_DIGEST: ${{ steps.gatekeeper.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${FINOPS_IMAGE}@${FINOPS_DIGEST}"
+          cosign sign --yes "${GATEKEEPER_IMAGE}@${GATEKEEPER_DIGEST}"
+
+      # GitOps 回写只做一件事: 把镜像钉到本次 commit SHA。
+      # 生成物绝不在此提交 (已由 test job 强制要求随 PR 提交), 因此不存在
+      # "新配置 + 旧产物" 的同步窗口, 也不会有 bot 覆盖手写内容的风险。
+      - name: GitOps Write-Back (pin image SHA only)
         if: github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
-          echo "Updating wasm-plugin.yaml to commit tag: ${{ github.sha }}"
           sed -i -E "s|url: oci://ghcr.io/nvd11/higress-finops-audit:.*|url: oci://ghcr.io/nvd11/higress-finops-audit:${{ github.sha }}|g" wasm-plugin.yaml
           sed -i -E "s|url: oci://ghcr.io/nvd11/higress-ai-gatekeeper:.*|url: oci://ghcr.io/nvd11/higress-ai-gatekeeper:${{ github.sha }}|g" wasm-plugin.yaml
 
-          # Track wasm-plugin.yaml, ingress.yaml, mcp-bridge.yaml and freshly generated Go models/pricing
+          if git diff --quiet -- wasm-plugin.yaml; then
+            echo "wasm-plugin.yaml 已指向 ${{ github.sha }}, 无需回写"
+            exit 0
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add wasm-plugin.yaml mcp-bridge.yaml ingress.yaml plugins/finops-audit/pkg/finops/pricing_gen.go plugins/ai-gatekeeper/models_gen.go
+          git add wasm-plugin.yaml
+          git commit -m "chore(gitops): pin wasm images to ${{ github.sha }} [skip ci]"
 
-          if ! git diff --cached --quiet; then
-            echo "Changes detected in wasm-plugin.yaml, ingress.yaml, mcp-bridge.yaml or generated Go code, committing..."
-            git commit -m "chore(gitops): sync topology, pricing and bump wasm images to ${{ github.sha }} [skip ci]"
-            git push origin main
-            echo "✅ Successfully synced GitOps repo with SHA ${{ github.sha }}"
-          else
-            echo "No change detected, skipping git push."
-          fi
+          # 并发 push 竞态防护: 非快进则 rebase 后重试 (最多 3 次)
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              echo "✅ wasm-plugin.yaml pinned to ${{ github.sha }}"
+              exit 0
+            fi
+            echo "push rejected (attempt ${attempt}/3), rebasing onto origin/main..."
+            git pull --rebase --autostash origin main || { git rebase --abort || true; }
+            sleep $(( attempt * 5 ))
+          done
+          echo "::error::GitOps 回写失败: 3 次 push 均被拒绝, wasm-plugin.yaml 未更新 (镜像已推送但未上线)"
+          exit 1
+
+  smoke:
+    name: Post-Deploy Smoke Test
+    runs-on: ubuntu-latest
+    needs: build-and-deploy
+    if: github.ref == 'refs/heads/main' && vars.SMOKE_BASE_URL != ''
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Wait for ArgoCD sync & probe gateway contract
+        env:
+          BASE_URL: ${{ vars.SMOKE_BASE_URL }}
+          SMOKE_API_KEY: ${{ secrets.SMOKE_API_KEY }}
+          EXPECTED_MODELS: ${{ vars.SMOKE_EXPECTED_MODELS || '11' }}
+        run: bash scripts/smoke.sh

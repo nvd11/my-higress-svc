@@ -16,8 +16,8 @@
    - [3.1 `wasm-plugin-ci-cd.yml` (FinOps Wasm 插件)](#31-wasm-plugin-ci-cdyml-finops-wasm-插件)
    - [3.2 `backend-ci-cd.yml` (Dashboard API 后端)](#32-backend-ci-cdyml-dashboard-api-后端)
    - [3.3 `frontend-ci-cd.yml` (Dashboard Web 前端)](#33-frontend-ci-cdyml-dashboard-web-前端)
-   - [3.4 `sync-config.yml` (模型网关动态路由配置)](#34-sync-configyml-模型网关动态路由配置)
-   - [3.5 `adapter-ci-cd.yml` (历史适配器 - 已退役)](#35-adapter-ci-cdyml-历史适配器---已退役)
+   - [3.4 生成物漂移护栏与 GitOps 回写收敛](#34-生成物漂移护栏与-gitops-回写收敛)
+   - [3.5 密钥扫描、镜像签名与部署后冒烟](#35-密钥扫描镜像签名与部署后冒烟)
 4. [配置凭据与 ExternalSecrets 同步](#4-配置凭据与-externalsecrets-同步)
 5. [常用运维与验证速查](#5-常用运维与验证速查)
 
@@ -85,10 +85,10 @@ graph TB
 
 ```
 .github/workflows/
-├── wasm-plugin-ci-cd.yml      # Wasm 插件编译、GHCR 发布与 GitOps 自动回写
-├── backend-ci-cd.yml          # Dashboard 后端 Go 单测、镜像构建与 Dispatch 派发
-├── frontend-ci-cd.yml         # Dashboard 前端打包、多架构镜像发布与 Dispatch 派发
-└── sync-config.yml            # 模型网关动态路由配置 Base64 自动注入
+├── wasm-plugin-ci-cd.yml      # Wasm 插件: 单测 + 漂移护栏 + 密钥扫描 + 编译签名 + GitOps 钉 SHA
+├── backend-ci-cd.yml          # Dashboard 后端: vet/单测/覆盖率门禁 + 镜像签名 + Digest Dispatch
+├── frontend-ci-cd.yml         # Dashboard 前端: tsc 类型检查 + 构建 + 镜像签名 + Digest Dispatch
+└── (已删除) sync-config.yml    # 历史遗留, 其职责已由 config.yaml + pricinggen 生成物取代
 ```
 
 ---
@@ -122,7 +122,8 @@ flowchart TD
 * **交付目标**：`ghcr.io/nvd11/my-higress-dashboard-backend`。
 * **构建架构**：`linux/arm64`（调度在 `ubuntu-24.04-arm` 原生 ARM 运行器上，秒级编译）。
 * **跨仓联动**：
-  构建完成后，捕获多架构镜像不可变摘要 `${{ steps.build.outputs.digest }}`，如果启用 `ENABLE_GITOPS_DIGEST_DISPATCH`，则向 `my-argocd-manifests` 派发事件：
+  仅在 **main 分支 push** 时派发（tag `v*` 构建不改写生产清单，避免用旧 commit 的镜像覆盖线上 digest）。
+  构建完成后捕获不可变摘要 `${{ steps.build.outputs.digest }}`，向 `my-argocd-manifests` 派发：
   ```bash
   curl -X POST https://api.github.com/repos/nvd11/my-argocd-manifests/dispatches \
     -H "Authorization: Bearer $DISPATCH_TOKEN" \
@@ -147,17 +148,38 @@ flowchart TD
 
 ---
 
-### 3.4 `sync-config.yml` (模型网关动态路由配置)
+### 3.4 生成物漂移护栏与 GitOps 回写收敛
 
-* **文件路径**：[`.github/workflows/sync-config.yml`](file:///home/gateman/projects/github/my-higress-svc/.github/workflows/sync-config.yml)
-* **触发条件**：`config.yaml` 发生变更。
-* **核心职责**：实现 **零 Docker 镜像构建的纯配置同步**。
-* **执行逻辑**：
-  将 `config.yaml` 转换为 Base64 编码字符串，向 `my-argocd-manifests` 发送 `update-adapter-config` 事件，直接以 ConfigMap 或 Ingress 注解形式热注入网关，即刻生效。
+`config.yaml` 是模型清单与价目的唯一真源，`pricinggen` 在构建期把它编译成 4 份生成物
+（`pricing_gen.go`、`models_gen.go`、`mcp-bridge.yaml`、`ingress.yaml`）。
+
+* **真护栏（G8）**：`test` job 先重新生成，再对生成物执行 `git diff --exit-code`。
+  只要「改了配置没提交生成物」或「手改生成物」，流水线立刻飘红并提示本地重跑命令。
+* **生成物必须随 PR 提交**：生成器不会再被 bot 悄悄回写，因此 ArgoCD 看到的每个 commit
+  都是「配置 + 产物」原子的，不存在「新配置 + 旧产物」的同步窗口。
+* **回写只钉镜像 SHA**：`build-and-deploy` 仅 `sed` 更新 `wasm-plugin.yaml` 中的镜像 tag，
+  提交信息带 `[skip ci]`；push 失败时自动 `pull --rebase` 重试 3 次，仍失败则 `::error::` 告警，
+  避免「镜像已推、清单未更新」的静默漂移。
+* **单测补充漂移守卫**：`TestPricingGeneratedFromConfigYAML` 逐字段比对配置与价目表，
+  `TestDeepSeekV41Flash1017Pricing` 独立重算人民币→美元折算，防止手抄错误。
 
 ---
 
-### 3.5 历史适配器清理说明 (Gemini Adapter Cleaned)
+### 3.5 密钥扫描、镜像签名与部署后冒烟
+
+| 能力 | 实现 | 触发 |
+| :--- | :--- | :--- |
+| **全仓密钥扫描** | `scripts/secret-scan.py`：扫描 `git ls-files` 全部文本，覆盖 `sk-*`、`AIza*`、私钥块，带占位符白名单 | 每次 wasm 流水线 `test` job |
+| **镜像签名** | `cosign sign --yes <image>@<digest>`（keyless / OIDC），需 `id-token: write` | main 分支三套流水线 |
+| **部署后冒烟** | `scripts/smoke.sh`：无 Key→401、伪造 Key→401 `invalid_api_key`、未纳管模型→400 `model_not_found`、`/v1/models` 长度=11 且不含别名、真实模型→200 | 配置了 `SMOKE_BASE_URL` 变量时，在写回后自动执行 |
+| **依赖更新** | `.github/dependabot.yml`：gomod ×3、npm、actions、docker | 每周/每月 |
+
+> 历史 `sync-config.yml`（把 config.yaml 转 Base64 派发）已删除：该职责已被
+> `config.yaml → pricinggen → 生成物` 的构建链取代，两套机制并存只会产生第二份真源。
+
+---
+
+### 3.6 历史适配器清理说明 (Gemini Adapter Cleaned)
 
 * **状态说明**：✅ **源码与流水线已彻底删除**。
 * **架构背景**：过去用于编译中间代理层 `gemini-adapter`，目前流量已完全由 Envoy 直连海外上游，该中转层已被 Envoy 原生 Wasm 彻底替代，相关的源码与 `adapter-ci-cd.yml` 已完成物理清理。
@@ -206,7 +228,7 @@ ssh gateman@43.139.214.231 "echo 32565624 | sudo -S kubectl logs deploy/higress-
 curl -N -i -X POST https://higress.jppwl.asia/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-REDACTED-see-OCI-Vault" \
-  -d '{"model": "gemini-2.5-flash", "messages": [{"role": "user", "content": "ping"}], "stream": true}'
+  -d '{"model": "gemini-3.8-flash", "messages": [{"role": "user", "content": "ping"}], "stream": true}'
 
 # 检查 Dashboard 后端入库日志
 ssh gateman@43.139.214.231 "echo 32565624 | sudo -S kubectl logs deploy/higress-dashboard-backend -n higress-system --tail=10"

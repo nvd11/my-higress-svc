@@ -11,17 +11,51 @@ on:
       - "v*"
   workflow_dispatch:
 
+concurrency:
+  group: frontend-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: nvd11/my-higress-dashboard-frontend
 
 jobs:
+  build-check:
+    name: Type Check & Build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Type check (tsc --noEmit)
+        working-directory: frontend
+        run: npx tsc -p tsconfig.json --noEmit
+
+      - name: Production build
+        working-directory: frontend
+        run: npm run build
+
   build-and-push:
-    name: Build & Push Frontend Image
+    name: Build, Sign & Push Frontend Image
+    needs: build-check
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
       packages: write
+      id-token: write   # cosign keyless (OIDC)
 
     steps:
       - name: Check out source
@@ -53,6 +87,7 @@ jobs:
         with:
           context: frontend
           file: frontend/Dockerfile
+          # 生产只调度到 OCI ARM64 节点 (free-arm-vm), 因此只出 arm64。
           platforms: linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
@@ -62,21 +97,32 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign Image (keyless)
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${REGISTRY}/${IMAGE_NAME}@${IMAGE_DIGEST}"
+
       - name: Record manifest digest
         run: |
           echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
           echo "Digest: ${{ steps.build.outputs.digest }}"
           {
-            echo "### Published Higress Frontend Image"
+            echo "### Published Higress Dashboard Frontend Image"
             echo
             echo '- Repository: `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}`'
-            echo '- Platforms: `linux/amd64`, `linux/arm64`'
+            echo '- Platform: `linux/arm64` (production node: free-arm-vm)'
+            echo '- Signed: `cosign keyless`'
             echo '- Manifest digest: `${{ steps.build.outputs.digest }}`'
             echo '- Commit: `${{ github.sha }}`'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Update GitOps image digest in my-argocd-manifests
-        if: ${{ vars.ENABLE_GITOPS_DIGEST_DISPATCH == 'true' }}
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         env:
           DISPATCH_TOKEN: ${{ secrets.ARGOCD_MANIFESTS_DISPATCH_TOKEN }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
@@ -84,7 +130,7 @@ jobs:
           set -euo pipefail
 
           if [[ -z "$DISPATCH_TOKEN" ]]; then
-            echo "ARGOCD_MANIFESTS_DISPATCH_TOKEN is required when GitOps dispatch is enabled" >&2
+            echo "::error::ARGOCD_MANIFESTS_DISPATCH_TOKEN 未配置, 镜像已推送但清单不会更新"
             exit 1
           fi
           if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then

@@ -67,7 +67,8 @@ model_list:
       cache_read_per_1m: 0.0
 
   # 👁️ A6 API 渠道: deepseek-v4.1-flash-1017 (多模态视觉模型 · 1017 快照版)
-  # ⚠️ a6api 未公开单价，pricing 暂记 0，待账单核实后回填
+  # 上游官方价目 (2026-11-15 主人提供, 人民币/1M): 输入 ¥0.048038 · 输出 ¥0.192151 · 缓存读 ¥0.000961
+  # 折算美元 (fx=7.23): 输入 0.006644 · 输出 0.026577 · 缓存读 0.000133
   - model_name: "deepseek-v4.1-flash-1017"
     provider: "a6api"
     protocol: "openai"
@@ -76,9 +77,9 @@ model_list:
     api_key: "os.environ/A6_API_KEY"
     fallback: "deepseek-v4.1-flash"
     pricing:
-      prompt_per_1m: 0.0
-      completion_per_1m: 0.0
-      cache_read_per_1m: 0.0
+      prompt_per_1m: 0.006644
+      completion_per_1m: 0.026577
+      cache_read_per_1m: 0.000133
 
   # ⚡ A6 API 渠道: deepseek-v4-flash-0731 (超长文本高速推理模型 · 实测支持 250k tokens)
   # ⚠️ a6api 未公开单价，pricing 暂记 0，待账单核实后回填

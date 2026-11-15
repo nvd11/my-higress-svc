@@ -1,0 +1,58 @@
+version: 2
+updates:
+  # Go modules (wasm 插件 x2 + 后端)
+  - package-ecosystem: gomod
+    directory: /plugins/finops-audit
+    schedule:
+      interval: weekly
+    groups:
+      go-deps:
+        patterns: ["*"]
+  - package-ecosystem: gomod
+    directory: /plugins/ai-gatekeeper
+    schedule:
+      interval: weekly
+    groups:
+      go-deps:
+        patterns: ["*"]
+  - package-ecosystem: gomod
+    directory: /services/dashboard-api
+    schedule:
+      interval: weekly
+    groups:
+      go-deps:
+        patterns: ["*"]
+
+  # 前端 npm
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # GitHub Actions 版本
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # 基础镜像 (nginx:alpine / node:22-alpine / golang 等)
+  - package-ecosystem: docker
+    directory: /frontend
+    schedule:
+      interval: monthly
+  - package-ecosystem: docker
+    directory: /services/dashboard-api
+    schedule:
+      interval: monthly
+  - package-ecosystem: docker
+    directory: /plugins/finops-audit
+    schedule:
+      interval: monthly
+  - package-ecosystem: docker
+    directory: /plugins/ai-gatekeeper
+    schedule:
+      interval: monthly

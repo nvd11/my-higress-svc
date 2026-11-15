@@ -1,5 +1,9 @@
 # my-higress-svc 交付目标与实施里程碑 (Delivery Goals & Milestones)
 
+> ⚠️ **文档状态（2026-11-15）**：v1.0 历史基线。当前交付形态为 `config.yaml` 驱动 +
+> `ai-gatekeeper`/`finops-audit` 双插件，CI/CD 规范见
+> [`GITOPS_DEPLOYMENT_ARCHITECTURE.md`](./GITOPS_DEPLOYMENT_ARCHITECTURE.md)。
+
 > **项目代号**：Project Phoenix-Gateway · **编制人**：Cindy (主人贴身大秘❤️)  
 > **战略定位**：构建高并发、微秒级延迟、兼具完整 FinOps 财务审计与大屏能力的云原生 AI 接入平台
 
@@ -77,7 +81,7 @@ gantt
 ### 🏁 里程碑 3：看板代码洁癖解耦与端到端闭环验证 (Phase 3: Clean Decoupled Dashboard & Full E2E Verification)
 - **目标**：彻底拒绝前后端混杂的胶水方案，将后端纯 Go 重构为高性能 RESTful 数据引擎（<30MB），前台作为独立 React 18 SPA 工程（Nginx <15MB），由网关在同域名下按路径分流，实现真正的云原生微服务解耦与零跨域（0 CORS）访问。
 - **具体交付项**：
-  1. `services/dashboard-api/`：纯 Go 重构的数据查询与三位一体中转落库模块，包含 `/api/v1/logs`、`/api/v1/metrics/summary`、`/api/v1/logs/{id}/payload`（Redis L1 + VLogs L2）及 `/api/v1/internal/audit-log`（单测覆盖率 83%+）；
+  1. `services/dashboard-api/`：纯 Go 重构的数据查询与三位一体中转落库模块，包含 `/api/v1/logs`、`/api/v1/metrics/summary`、`/api/v1/logs/{id}/payload`（Redis L1 + VLogs L2）及 `/api/v1/internal/audit-log`（当前实测覆盖率 55.6%，CI 门禁 50% 防回退）；
   2. `frontend/`：独立 React 18 + Vite + Tailwind CSS 源码工程，包含专属 `Dockerfile` (Nginx Alpine) 与 `nginx.conf`；
   3. `.github/workflows/`：独立解耦的两套自动化 CI/CD 流水线（`backend-ci-cd.yml` 与 `frontend-ci-cd.yml`），原生支持 `linux/arm64` 并自动推送到 GHCR；
   4. 验证前端点击调用列表时，能够秒级从 Redis L1 缓存解压并滑出抽屉（Payload Drawer），未命中时无缝从 VictoriaLogs 动态重组分片；
