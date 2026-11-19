@@ -76,7 +76,7 @@ func TestValidateAndResolveModel(t *testing.T) {
 	canonicalModels := defaultCanonicalModels
 	aliases := defaultAliases
 
-	// 1. Verify all 10 canonical models are allowed and recognized as canonical
+	// 1. Verify all canonical models are allowed and recognized as canonical
 	for _, m := range canonicalModels {
 		t.Run("canonical_"+m, func(t *testing.T) {
 			resolved, isAlias, allowed := validateAndResolveModel(m, canonicalModels, aliases)
@@ -92,19 +92,21 @@ func TestValidateAndResolveModel(t *testing.T) {
 		})
 	}
 
-	// 2. Verify all 7 aliases resolve correctly
+	// 2. Verify all 9 aliases resolve correctly
 	aliasExpectations := map[string]string{
-		"gemini-3.8":       "gemini-3.8-flash",
-		"gemini-2.5-flash": "gemini-3.8-flash",
-		"kimi":             "kimi-k3",
-		"glm":              "glm-5.3",
-		"hunyuan3":         "hy3",
-		"luna":             "gpt-5.6-luna",
-		"gpt-5.6-luna-a6":  "gpt-5.6-luna",
+		"kimi":                   "kimi-k3",
+		"glm":                    "glm-5.3",
+		"ds-4.1-flash":           "deepseek-v4.1-flash",
+		"deepseek-4.1-flash":     "deepseek-v4.1-flash",
+		"DeepSeek-V4-Flash-0731": "deepseek-v4-flash-0731",
+		"ds-v4-flash-0731":       "deepseek-v4-flash-0731",
+		"hunyuan3":               "hy3",
+		"luna":                   "gpt-5.6-luna",
+		"gpt-5.6-luna-a6":        "gpt-5.6-luna",
 	}
 
-	if len(aliasExpectations) != 7 {
-		t.Fatalf("expected exactly 7 alias test expectations, got %d", len(aliasExpectations))
+	if len(aliasExpectations) != 9 {
+		t.Fatalf("expected exactly 9 alias test expectations, got %d", len(aliasExpectations))
 	}
 
 	for alias, expectedCanonical := range aliasExpectations {
@@ -224,11 +226,12 @@ func TestParseConfigDefaults(t *testing.T) {
 }
 
 func TestModelProvidersMapping(t *testing.T) {
-	if defaultModelProviders["gemini-3.8-flash"] != "openai-proxy-for-antigravity" {
-		t.Errorf("gemini-3.8-flash provider = %q, want openai-proxy-for-antigravity", defaultModelProviders["gemini-3.8-flash"])
+	a6Models := []string{
+		"kimi-k3", "glm-5.3", "hy3", "gpt-5.6-luna",
+		"deepseek-v4-pro", "deepseek-v4-pro-0813",
+		"deepseek-v4.1-flash", "deepseek-v4.1-flash-1017", "deepseek-v4-flash-0731",
 	}
-	nonGemini := []string{"kimi-k3", "glm-5.3", "hy3", "gpt-5.6-luna", "deepseek-v4-pro-0813"}
-	for _, m := range nonGemini {
+	for _, m := range a6Models {
 		if defaultModelProviders[m] != "a6api" {
 			t.Errorf("model %s provider = %q, want a6api", m, defaultModelProviders[m])
 		}

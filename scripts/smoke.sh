@@ -11,7 +11,7 @@
 # 环境变量:
 #   BASE_URL          必填, 网关根地址 (不带 /v1)
 #   SMOKE_API_KEY     必填, 一把合法的 Virtual Key
-#   EXPECTED_MODELS   可选, /v1/models 应返回的主名数量 (默认 10)
+#   EXPECTED_MODELS   可选, /v1/models 应返回的主名数量 (默认 9)
 #   WAIT_ATTEMPTS     可选, 等待网关就绪的重试次数 (默认 6, 每次间隔 20s)
 #
 # 退出码: 0 = 全部通过; 非 0 = 有契约被破坏
@@ -20,7 +20,7 @@ set -uo pipefail
 
 : "${BASE_URL:?BASE_URL 未设置}"
 : "${SMOKE_API_KEY:?SMOKE_API_KEY 未设置}"
-EXPECTED_MODELS="${EXPECTED_MODELS:-10}"
+EXPECTED_MODELS="${EXPECTED_MODELS:-9}"
 WAIT_ATTEMPTS="${WAIT_ATTEMPTS:-6}"
 WAIT_INTERVAL="${WAIT_INTERVAL:-20}"
 
@@ -63,11 +63,11 @@ if [[ "$ready" != "1" ]]; then
 fi
 
 echo "▶ G1: 缺失 Key 必须在边缘 401 (上游调用次数应为 0)"
-req POST /v1/chat/completions '{"model":"gemini-3.8-flash","messages":[{"role":"user","content":"ping"}]}'
+req POST /v1/chat/completions '{"model":"deepseek-v4.1-flash-1017","messages":[{"role":"user","content":"ping"}]}'
 if [[ "$HTTP_CODE" == "401" ]]; then ok "401 unauthorized"; else bad "期望 401, 实际 $HTTP_CODE: ${BODY:0:200}"; fi
 
 echo "▶ G1-b: 伪造 Key 必须 401 且 code=invalid_api_key"
-req POST /v1/chat/completions '{"model":"gemini-3.8-flash","messages":[{"role":"user","content":"ping"}]}' 'Bearer sk-forged-key-should-never-pass'
+req POST /v1/chat/completions '{"model":"deepseek-v4.1-flash-1017","messages":[{"role":"user","content":"ping"}]}' 'Bearer sk-forged-key-should-never-pass'
 if [[ "$HTTP_CODE" == "401" && "$BODY" == *invalid_api_key* ]]; then
   ok "401 invalid_api_key"
 else
@@ -97,7 +97,7 @@ else
 fi
 
 echo "▶ G6: 真实模型必须 200 且返回 usage"
-req POST /v1/chat/completions '{"model":"gemini-3.8-flash","messages":[{"role":"user","content":"ping"}],"max_tokens":8}' "Bearer ${SMOKE_API_KEY}"
+req POST /v1/chat/completions '{"model":"deepseek-v4.1-flash-1017","messages":[{"role":"user","content":"ping"}],"max_tokens":8}' "Bearer ${SMOKE_API_KEY}"
 if [[ "$HTTP_CODE" == "200" ]]; then ok "200 正常推理"; else bad "期望 200, 实际 $HTTP_CODE: ${BODY:0:200}"; fi
 
 echo
