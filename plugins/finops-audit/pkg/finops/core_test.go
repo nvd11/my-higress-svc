@@ -1,25 +1,11 @@
 package finops
 
 import (
+	"math"
 	"testing"
 )
 
 func TestCalculateCost(t *testing.T) {
-	// 针对 Gemini 3.8 Flash: 1M 输入 (无缓存) + 1M 输出 = 0.75 + 3.75
-	costUSD, costCNY, declared := CalculateCost("gemini-3.8-flash", 1000000, 1000000, 0, 7.23)
-	expectedUSD := 4.5
-	expectedCNY := 32.535
-
-	if !declared {
-		t.Fatalf("gemini-3.8-flash 应命中 config.yaml 价目")
-	}
-	if costUSD != expectedUSD {
-		t.Errorf("costUSD = %f; want %f", costUSD, expectedUSD)
-	}
-	if costCNY != expectedCNY {
-		t.Errorf("costCNY = %f; want %f", costCNY, expectedCNY)
-	}
-
 	// DeepSeek V4 Pro: 1M 输入 (无缓存) + 1M 输出 = 0.00096 + 0.00354
 	dsUSD, dsCNY, declared := CalculateCost("deepseek-v4-pro-0813", 1000000, 1000000, 0, 7.23)
 	expectedDsUSD := 0.0045
@@ -37,32 +23,33 @@ func TestCalculateCost(t *testing.T) {
 
 // 缓存命中必须走 config.yaml 的 cache_read_per_1m, 而不是按输入全价算
 func TestCalculateCostUsesCachePrice(t *testing.T) {
-	// gemini-3.8-flash: 输入 0.75 / 输出 3.75 / 缓存读 0.075
-	// 1M 输入其中 1M 全部命中缓存, 输出 0 → 应只收缓存价 0.075
-	usd, _, declared := CalculateCost("gemini-3.8-flash", 1000000, 0, 1000000, 7.23)
+	// deepseek-v4.1-flash-1017: 输入 0.006644 / 输出 0.026577 / 缓存读 0.000133
+	// 1M 输入其中 1M 全部命中缓存, 输出 0 → 应只收缓存价 0.000133
+	usd, _, declared := CalculateCost("deepseek-v4.1-flash-1017", 1000000, 0, 1000000, 7.23)
 	if !declared {
-		t.Fatalf("gemini-3.8-flash 应命中 config.yaml 价目")
+		t.Fatalf("deepseek-v4.1-flash-1017 应命中 config.yaml 价目")
 	}
-	if usd != 0.075 {
-		t.Fatalf("全缓存输入应收费 0.075, 实际 %f (缓存被按全价算了)", usd)
+	if math.Abs(usd-0.000133) > 1e-12 {
+		t.Fatalf("全缓存输入应收费 0.000133, 实际 %g (缓存被按全价算了)", usd)
 	}
 
-	// 半缓存: 500k 全价 (0.375) + 500k 缓存价 (0.0375) = 0.4125
-	usd, _, _ = CalculateCost("gemini-3.8-flash", 1000000, 0, 500000, 7.23)
-	if usd != 0.4125 {
-		t.Fatalf("半缓存输入应收费 0.4125, 实际 %f", usd)
+	// 半缓存: 500k 全价 (0.003322) + 500k 缓存价 (0.0000665) = 0.0033885 → 保留 6 位 = 0.003389
+	usd, _, _ = CalculateCost("deepseek-v4.1-flash-1017", 1000000, 0, 500000, 7.23)
+	if math.Abs(usd-0.003389) > 1e-12 {
+		t.Fatalf("半缓存输入应收费 0.003389, 实际 %g", usd)
 	}
 }
 
 // 缓存 token 数异常时不得产生负输入
 func TestCalculateCostClampsCacheOverflow(t *testing.T) {
-	usd, _, declared := CalculateCost("gemini-3.8-flash", 1000, 0, 999999, 7.23)
+	usd, _, declared := CalculateCost("deepseek-v4.1-flash-1017", 1000, 0, 999999, 7.23)
 	if !declared {
-		t.Fatalf("gemini-3.8-flash 应命中 config.yaml 价目")
+		t.Fatalf("deepseek-v4.1-flash-1017 应命中 config.yaml 价目")
 	}
-	// 全部视为缓存: 1000 tokens × 0.075/1M = 0.000075
-	if usd != 0.000075 {
-		t.Fatalf("缓存溢出应被裁剪为 prompt 上限, 实际 %f", usd)
+	// 缓存 token 被裁剪到 prompt 上限 1000；1000 × 0.000133/1M = 0.000000133，
+	// 6 位小数舍入后为 0。若未裁剪会得到 0.000133。
+	if math.Abs(usd-0) > 1e-12 {
+		t.Fatalf("缓存溢出应被裁剪为 prompt 上限, 实际 %g", usd)
 	}
 }
 
@@ -80,11 +67,11 @@ func TestUndeclaredModelHasNoFallbackPrice(t *testing.T) {
 
 // config.yaml 的 aliases 必须解析为同一价目, 并归一到主名
 func TestAliasResolvesToCanonicalPricing(t *testing.T) {
-	canonical, ok := GetModelPricing("gemini-3.8-flash")
+	canonical, ok := GetModelPricing("deepseek-v4.1-flash")
 	if !ok {
-		t.Fatalf("gemini-3.8-flash 应命中")
+		t.Fatalf("deepseek-v4.1-flash 应命中")
 	}
-	for _, alias := range []string{"gemini-3.8", "gemini-2.5-flash"} {
+	for _, alias := range []string{"ds-4.1-flash", "deepseek-4.1-flash"} {
 		got, ok := GetModelPricing(alias)
 		if !ok {
 			t.Fatalf("别名 %q 未生效", alias)
@@ -92,7 +79,7 @@ func TestAliasResolvesToCanonicalPricing(t *testing.T) {
 		if got != canonical {
 			t.Errorf("别名 %q 价目与主名不一致: %+v vs %+v", alias, got, canonical)
 		}
-		if got.Canonical != "gemini-3.8-flash" {
+		if got.Canonical != "deepseek-v4.1-flash" {
 			t.Errorf("别名 %q 未归一到主名, 得到 %q", alias, got.Canonical)
 		}
 	}
