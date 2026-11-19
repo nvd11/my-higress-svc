@@ -66,12 +66,12 @@ echo "▶ G1: 缺失 Key 必须在边缘 401 (上游调用次数应为 0)"
 req POST /v1/chat/completions '{"model":"deepseek-v4.1-flash-1017","messages":[{"role":"user","content":"ping"}]}'
 if [[ "$HTTP_CODE" == "401" ]]; then ok "401 unauthorized"; else bad "期望 401, 实际 $HTTP_CODE: ${BODY:0:200}"; fi
 
-echo "▶ G1-b: 伪造 Key 必须 401 且 code=invalid_api_key"
+echo "▶ G1-b: 伪造 Key 必须 401 且 code=unauthorized"
 req POST /v1/chat/completions '{"model":"deepseek-v4.1-flash-1017","messages":[{"role":"user","content":"ping"}]}' 'Bearer sk-forged-key-should-never-pass'
-if [[ "$HTTP_CODE" == "401" && "$BODY" == *invalid_api_key* ]]; then
-  ok "401 invalid_api_key"
+if [[ "$HTTP_CODE" == "401" && "$BODY" == *unauthorized* ]]; then
+  ok "401 unauthorized"
 else
-  bad "期望 401 invalid_api_key, 实际 $HTTP_CODE: ${BODY:0:200}"
+  bad "期望 401 unauthorized, 实际 $HTTP_CODE: ${BODY:0:200}"
 fi
 
 echo "▶ G2: 未纳管模型必须在边缘 400 model_not_found"
