@@ -11,7 +11,7 @@
 # 环境变量:
 #   BASE_URL          必填, 网关根地址 (不带 /v1)
 #   SMOKE_API_KEY     必填, 一把合法的 Virtual Key
-#   EXPECTED_MODELS   可选, /v1/models 应返回的主名数量 (默认 11)
+#   EXPECTED_MODELS   可选, /v1/models 应返回的主名数量 (默认 10)
 #   WAIT_ATTEMPTS     可选, 等待网关就绪的重试次数 (默认 6, 每次间隔 20s)
 #
 # 退出码: 0 = 全部通过; 非 0 = 有契约被破坏
@@ -20,7 +20,7 @@ set -uo pipefail
 
 : "${BASE_URL:?BASE_URL 未设置}"
 : "${SMOKE_API_KEY:?SMOKE_API_KEY 未设置}"
-EXPECTED_MODELS="${EXPECTED_MODELS:-11}"
+EXPECTED_MODELS="${EXPECTED_MODELS:-10}"
 WAIT_ATTEMPTS="${WAIT_ATTEMPTS:-6}"
 WAIT_INTERVAL="${WAIT_INTERVAL:-20}"
 
