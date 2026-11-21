@@ -35,6 +35,24 @@ model_list:
       completion_per_1m: 0.032057
       cache_read_per_1m: 0.0102
 
+  # ⚡ A6 API 渠道: glm-5.3-flash (轻量推理模型 · 带思维链，max_tokens 建议 ≥512)
+  # 商户价实测 (2026-11-21 A6 控制台, 人民币/1M): 输入 ¥0.0389 · 输出 ¥0.1295 · 缓存读 ¥0.0078 · 缓存写 ¥0
+  # 折算美元 (fx=7.2300): 输入 0.00538 · 输出 0.017911 · 缓存读 0.001079
+  # ⚠️ reasoning 会大量消耗 completion tokens；max_tokens 过小(<=200)会只思考不出正文
+  - model_name: "glm-5.3-flash"
+    aliases:
+      - "glm-flash"
+    provider: "a6api"
+    protocol: "openai"
+    upstream_url: "https://api.a6api.com/v1/chat/completions"
+    upstream_model: "glm-5.3-flash"
+    api_key: "os.environ/A6_API_KEY"
+    fallback: "glm-5.3"
+    pricing:
+      prompt_per_1m: 0.00538
+      completion_per_1m: 0.017911
+      cache_read_per_1m: 0.001079
+
   # 👁️ A6 API 渠道: deepseek-v4.1-flash (多模态视觉模型 · opencode vision-translator 极速眼睛)
   # 实测 2026-10-27: OCR 与细节解析极佳，全链路 3.1~5.6s，远快于 hy3
   - model_name: "deepseek-v4.1-flash"
