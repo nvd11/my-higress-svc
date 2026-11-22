@@ -302,7 +302,7 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 	model := strings.TrimSpace(modelResult.String())
 
 	// 5. 模型准入查验 (22 键严格白名单)
-	resolvedModel, isAlias, allowed := validateAndResolveModel(model, config.CanonicalModels, config.Aliases)
+	resolvedModel, _, allowed := validateAndResolveModel(model, config.CanonicalModels, config.Aliases)
 	if !allowed {
 		errMsg := fmt.Sprintf("The model '%s' does not exist or you do not have access to it.", model)
 		sendRejectRecord(config, reqID, consumer, model, 400, errMsg)
@@ -315,13 +315,22 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 		return types.ActionPause
 	}
 
-	// 6. 别名改写与原始名跟踪 (方案 A 模式)
-	if isAlias {
-		newBody, err := rewriteBodyModel(body, resolvedModel)
+	// 6. 模型名改写: 别名 -> 网关主名 -> 上游真实模型名
+	//
+	// config.yaml 的 model_name 是网关对外的稳定主名, upstream_model 才是上游
+	// 真正认识的 ID (两者可以不同, 例如带渠道后缀或快照后缀)。gatekeeper 必须
+	// 在转发前把 body.model 改成 upstream_model, 否则上游会 400 model_not_found。
+	// 映射由 pricinggen 从 config.yaml 生成到 defaultModelUpstream。
+	upstreamModel := defaultModelUpstream[resolvedModel]
+	if upstreamModel == "" {
+		upstreamModel = resolvedModel
+	}
+	if upstreamModel != model {
+		newBody, err := rewriteBodyModel(body, upstreamModel)
 		if err == nil {
 			_ = proxywasm.ReplaceHttpRequestBody(newBody)
 			// ⚠️ 必须同步 content-length: ReplaceHttpRequestBody 不会自动更新该头，
-			//    别名与规范名长度不同时会导致上游按旧长度读取 →
+			//    名字长度变化时会导致上游按旧长度读取 →
 			//      变长: JSON 被截断 (400)
 			//      变短: 上游死等缺失字节 (30s 超时 → 502)
 			_ = proxywasm.ReplaceHttpRequestHeader("content-length", strconv.Itoa(len(newBody)))
@@ -345,6 +354,13 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 	}
 	if err := setRequestHeader("x-higress-llm-provider", provider); err != nil {
 		proxywasm.LogErrorf("[ai-gatekeeper] inject x-higress-llm-provider failed: %v", err)
+	}
+	// OpenCode Go 要求请求携带 x-opencode-session, 否则 400 MissingSessionID。
+	// 实测任意非空字符串均可; 用 consumer 作为稳定 session, 便于路由亲和与排障。
+	if provider == "opencode-go" {
+		if err := setRequestHeader("x-opencode-session", "higress:"+consumer); err != nil {
+			proxywasm.LogErrorf("[ai-gatekeeper] inject x-opencode-session failed: %v", err)
+		}
 	}
 	// 回读校验: 确认 header 真的落表, 作为路由是否生效的唯一可信证据
 	if got, err := proxywasm.GetHttpRequestHeader("x-higress-llm-provider"); err != nil || got != provider {

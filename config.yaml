@@ -161,3 +161,38 @@ model_list:
       prompt_per_1m: 0.00096
       completion_per_1m: 0.00354
       cache_read_per_1m: 0.0000295
+
+  # 🆓 OpenCode Go 订阅渠道 ($10/月, 月度额度上限 $100 等值)
+  # 官方 Go 计价口径 (USD / 1M tokens):
+  #   input 0.15 · output 0.60 · cache read 0.003
+  # ⚠️ 1017 在 UTC 周一~周五 01:00-04:00 / 06:00-10:00 有 2x 高峰乘数,
+  #    此处记录基础价; 实际额度消耗以 opencode /usage 为准。
+  # ⚠️ 上游 API ID 是 deepseek-v4.1-flash (不带 -1017), -1017 是快照名。
+  - model_name: "deepseek-v4.1-flash-1017-oc"
+    aliases:
+      - "1017-oc"
+      - "oc-1017"
+    provider: "opencode-go"
+    protocol: "openai"
+    upstream_url: "https://opencode.ai/inference/go/v1/chat/completions"
+    upstream_model: "deepseek-v4.1-flash"
+    api_key: "os.environ/OPENCODE_GO_API_KEY"
+    pricing:
+      prompt_per_1m: 0.15
+      completion_per_1m: 0.60
+      cache_read_per_1m: 0.003
+
+  # 🆓 OpenCode Go 免费模型 (官方两个口径均为 0)
+  # 1M 上下文, 支持图像理解与 reasoning; 限时免费, 随时可能下线。
+  - model_name: "hy4-flash-free-oc"
+    aliases:
+      - "hy4-free-oc"
+    provider: "opencode-go"
+    protocol: "openai"
+    upstream_url: "https://opencode.ai/inference/go/v1/chat/completions"
+    upstream_model: "hy4-flash-free"
+    api_key: "os.environ/OPENCODE_GO_API_KEY"
+    pricing:
+      prompt_per_1m: 0.0
+      completion_per_1m: 0.0
+      cache_read_per_1m: 0.0

@@ -33,12 +33,13 @@ import (
 //  1. McpBridge 的 dns registry (host/port 来自 upstream_url)
 //  2. 一条按 x-higress-llm-provider 精确匹配的 Ingress (直连该上游, 不经任何中转)
 type providerRoute struct {
-	Name      string   // provider 名, 同时是 registry 名与路由匹配值
-	Scheme    string   // http / https
-	Host      string   // 上游主机名, 例如 api.a6api.com
-	Port      int      // 上游端口
-	APIKeyEnv string   // 例如 A6_API_KEY (来自 config 的 os.environ/A6_API_KEY)
-	Models    []string // 归属该渠道的模型主名
+	Name         string   // provider 名, 同时是 registry 名与路由匹配值
+	Scheme       string   // http / https
+	Host         string   // 上游主机名, 例如 api.a6api.com
+	Port         int      // 上游端口
+	UpstreamPath string   // 上游真实路径, 例如 /inference/go/v1/chat/completions
+	APIKeyEnv    string   // 例如 A6_API_KEY (来自 config 的 os.environ/A6_API_KEY)
+	Models       []string // 归属该渠道的模型主名
 }
 
 func main() {
@@ -136,6 +137,14 @@ func main() {
 			}
 			fmt.Fprintf(&gb, "\t%s: %s,\n", quote(m.Name), quote(provider))
 		}
+		gb.WriteString("}\n\n")
+
+		gb.WriteString("// defaultModelUpstream 由 config.yaml 自动导出的 模型 -> 上游真实模型名 映射\n")
+		gb.WriteString("// 网关主名可以与上游模型名不同 (例如带渠道后缀), 请求体在转发前统一改写。\n")
+		gb.WriteString("var defaultModelUpstream = map[string]string{\n")
+		for _, m := range models {
+			fmt.Fprintf(&gb, "\t%s: %s,\n", quote(m.Name), quote(upstream(m)))
+		}
 		gb.WriteString("}\n")
 
 		gsrc, err := format.Source([]byte(gb.String()))
@@ -228,12 +237,21 @@ func collectProviders(models chargeconfig.List) ([]providerRoute, error) {
 		}
 
 		host := u.Hostname()
+		upstreamPath := u.Path
+		if upstreamPath == "" {
+			upstreamPath = "/"
+		}
 		if i, ok := idx[name]; ok {
 			p := &out[i]
 			if p.Scheme != scheme || p.Host != host || p.Port != port {
 				return nil, fmt.Errorf(
 					"provider %s 下的模型指向了不同上游 (%s://%s:%d vs %s://%s:%d), 请拆成不同 provider",
 					name, p.Scheme, p.Host, p.Port, scheme, host, port)
+			}
+			if p.UpstreamPath != upstreamPath {
+				return nil, fmt.Errorf(
+					"provider %s 下的模型 upstream_url 路径不一致 (%q vs %q), 请拆成不同 provider",
+					name, p.UpstreamPath, upstreamPath)
 			}
 			if p.APIKeyEnv != apiKeyEnv {
 				return nil, fmt.Errorf("provider %s 下的模型 api_key 引用不一致 (%q vs %q)", name, p.APIKeyEnv, apiKeyEnv)
@@ -244,12 +262,13 @@ func collectProviders(models chargeconfig.List) ([]providerRoute, error) {
 
 		idx[name] = len(out)
 		out = append(out, providerRoute{
-			Name:      name,
-			Scheme:    scheme,
-			Host:      host,
-			Port:      port,
-			APIKeyEnv: apiKeyEnv,
-			Models:    []string{m.Name},
+			Name:         name,
+			Scheme:       scheme,
+			Host:         host,
+			Port:         port,
+			UpstreamPath: upstreamPath,
+			APIKeyEnv:    apiKeyEnv,
+			Models:       []string{m.Name},
 		})
 	}
 	return out, nil
@@ -366,6 +385,15 @@ metadata:
 			// higress-provider-key-sync Job 从 Secret 回填。
 			// 这里只登记"该 provider 需要哪个 Secret 键", 供 Job 解析。
 			fmt.Fprintf(&b, "    higress.io/upstream-key-env: %s\n", p.APIKeyEnv)
+		}
+
+		// 上游路径与客户端默认路径 (/v1/chat/completions) 不同时, 用 Higress
+		// 兼容的 nginx rewrite-target 注解改写。例如 OpenCode Go 的
+		// /inference/go/v1/chat/completions。A6 等原生 /v1 渠道不输出该注解,
+		// 保持现有行为完全不变。
+		const clientChatPath = "/v1/chat/completions"
+		if p.UpstreamPath != "" && p.UpstreamPath != clientChatPath {
+			fmt.Fprintf(&b, "    nginx.ingress.kubernetes.io/rewrite-target: %s\n", p.UpstreamPath)
 		}
 
 		b.WriteString(`spec:

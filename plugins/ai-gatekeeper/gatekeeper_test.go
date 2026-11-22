@@ -237,3 +237,39 @@ func TestModelProvidersMapping(t *testing.T) {
 		}
 	}
 }
+
+func TestModelUpstreamMapping(t *testing.T) {
+	// 网关主名与上游模型名相同的模型: 映射应等于自身
+	for _, m := range []string{"kimi-k3", "glm-5.3", "hy3", "deepseek-v4-pro"} {
+		if got := defaultModelUpstream[m]; got != m {
+			t.Errorf("model %s upstream = %q, want %q", m, got, m)
+		}
+	}
+
+	// 网关主名与上游模型名不同的模型: 必须映射到上游真实 ID
+	cases := map[string]string{
+		"deepseek-v4-flash-0731":      "DeepSeek-V4-Flash-0731",
+		"deepseek-v4.1-flash-1017-oc": "deepseek-v4.1-flash",
+		"hy4-flash-free-oc":           "hy4-flash-free",
+	}
+	for gw, want := range cases {
+		if got := defaultModelUpstream[gw]; got != want {
+			t.Errorf("model %s upstream = %q, want %q", gw, got, want)
+		}
+	}
+
+	// 每个主名都必须有映射, 防止新增模型时漏生成
+	for _, m := range defaultCanonicalModels {
+		if defaultModelUpstream[m] == "" {
+			t.Errorf("model %s missing in defaultModelUpstream", m)
+		}
+	}
+}
+
+func TestOpenCodeProviderMapping(t *testing.T) {
+	for _, m := range []string{"deepseek-v4.1-flash-1017-oc", "hy4-flash-free-oc"} {
+		if got := defaultModelProviders[m]; got != "opencode-go" {
+			t.Errorf("model %s provider = %q, want opencode-go", m, got)
+		}
+	}
+}
