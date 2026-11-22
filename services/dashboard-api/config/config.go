@@ -6,18 +6,17 @@ import (
 )
 
 type Config struct {
-	Port              string
-	MySQLHost         string
-	MySQLPort         string
-	MySQLUser         string
-	MySQLPassword     string
-	MySQLDatabase     string
-	RedisHost         string
-	RedisPort         string
-	RedisPassword     string
-	VictoriaLogsURL   string
-	AntigravityProxyURL string
-	DefaultUSDtoCNY   float64
+	Port            string
+	MySQLHost       string
+	MySQLPort       string
+	MySQLUser       string
+	MySQLPassword   string
+	MySQLDatabase   string
+	RedisHost       string
+	RedisPort       string
+	RedisPassword   string
+	VictoriaLogsURL string
+	DefaultUSDtoCNY float64
 }
 
 func LoadConfig() *Config {
@@ -52,7 +51,6 @@ func LoadConfig() *Config {
 		RedisPort:       getEnv("REDIS_PORT", "6379"),
 		RedisPassword:   getEnv("REDIS_PASSWORD", ""),
 		VictoriaLogsURL: vlogsURL,
-		AntigravityProxyURL: getEnv("ANTIGRAVITY_PROXY_URL", "http://10.43.250.150:3000"),
 		DefaultUSDtoCNY: fxRate,
 	}
 }
