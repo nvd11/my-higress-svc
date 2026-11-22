@@ -273,3 +273,18 @@ func TestOpenCodeProviderMapping(t *testing.T) {
 		}
 	}
 }
+
+func TestRewriteOpenCodePath(t *testing.T) {
+	cases := map[string]string{
+		"/v1/chat/completions":              "/inference/go/v1/chat/completions",
+		"/v1/chat/completions?foo=bar":      "/inference/go/v1/chat/completions?foo=bar",
+		"/inference/go/v1/chat/completions": "/inference/go/v1/chat/completions",
+		"/health":                           "/health",
+		"/v1":                               "/v1",
+	}
+	for in, want := range cases {
+		if got := rewriteOpenCodePath(in); got != want {
+			t.Errorf("rewriteOpenCodePath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

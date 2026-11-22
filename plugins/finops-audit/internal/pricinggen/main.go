@@ -387,15 +387,6 @@ metadata:
 			fmt.Fprintf(&b, "    higress.io/upstream-key-env: %s\n", p.APIKeyEnv)
 		}
 
-		// 上游路径与客户端默认路径 (/v1/chat/completions) 不同时, 用 Higress
-		// 兼容的 nginx rewrite-target 注解改写。例如 OpenCode Go 的
-		// /inference/go/v1/chat/completions。A6 等原生 /v1 渠道不输出该注解,
-		// 保持现有行为完全不变。
-		const clientChatPath = "/v1/chat/completions"
-		if p.UpstreamPath != "" && p.UpstreamPath != clientChatPath {
-			fmt.Fprintf(&b, "    nginx.ingress.kubernetes.io/rewrite-target: %s\n", p.UpstreamPath)
-		}
-
 		b.WriteString(`spec:
   ingressClassName: higress
   rules:

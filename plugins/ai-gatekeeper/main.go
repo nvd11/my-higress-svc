@@ -170,6 +170,20 @@ func rewriteBodyModel(body []byte, targetModel string) ([]byte, error) {
 	return sjson.SetBytes(body, "model", targetModel)
 }
 
+// rewriteOpenCodePath 把客户端的 /v1/... 映射为 OpenCode Go 的
+// /inference/go/v1/...，并保留 query string。
+func rewriteOpenCodePath(path string) string {
+	const upstreamBase = "/inference/go/v1"
+	clean, query := path, ""
+	if i := strings.IndexByte(clean, '?'); i >= 0 {
+		clean, query = clean[:i], clean[i:]
+	}
+	if strings.HasPrefix(clean, "/v1/") {
+		return upstreamBase + clean[len("/v1"):] + query
+	}
+	return path
+}
+
 // sendRejectRecord 异步发送阻断安全审计记录 (G7 安全可观测)
 func sendRejectRecord(config PluginConfig, reqID, consumer, modelRequested string, statusCode int, errMsg string) {
 	if config.DashboardAPIURL == "" {
@@ -341,6 +355,20 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 	provider := defaultModelProviders[resolvedModel]
 	if provider == "" {
 		provider = "a6api"
+	}
+
+	// OpenCode Go 的上游路径与客户端不同: 客户端 /v1/... → 上游 /inference/go/v1/...
+	// Higress 本部署未生效 nginx rewrite-target 注解, 因此在 Wasm 层直接改写 :path。
+	if provider == "opencode-go" {
+		if rawPath, err := proxywasm.GetHttpRequestHeader(":path"); err == nil {
+			if newPath := rewriteOpenCodePath(rawPath); newPath != rawPath {
+				if err := proxywasm.ReplaceHttpRequestHeader(":path", newPath); err != nil {
+					proxywasm.LogErrorf("[ai-gatekeeper] rewrite opencode path failed: %v", err)
+				} else {
+					proxywasm.LogWarnf("[ai-gatekeeper] opencode path rewritten: %s -> %s", rawPath, newPath)
+				}
+			}
+		}
 	}
 	// ⚠️ 必须用 Remove + Add: Envoy 的 replaceHeaderMapValue 在 key 不存在时返回
 	// NotFound 且不会创建 header。客户端请求里天然没有 x-higress-llm-* 这三个头,
