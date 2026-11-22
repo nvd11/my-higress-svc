@@ -201,6 +201,10 @@ flowchart TD
 
 ## 5. 常用运维与验证速查
 
+> 安全约定：所有远程操作必须使用 **SSH key 免密登录**；需要 root 权限时使用
+> `sudo -n`（要求 sudoers 已配置 NOPASSWD）。**严禁**在文档、脚本或 Git 中
+> 保存明文口令。历史凭据轮换说明见 [CICD_PIPELINE.md](CICD_PIPELINE.md) 第 11 章。
+
 ### 5.1 查看 ArgoCD 核心状态 (阿里云 Master)
 ```bash
 # 查询应用同步与健康状态（预期正常为 Synced / Healthy）
@@ -213,13 +217,13 @@ ssh root@8.148.149.80 "kubectl annotate app higress-svc -n argocd argocd.argopro
 ### 5.2 查看网关与 Wasm 运行日志 (腾讯云 CP / OCI Node)
 ```bash
 # 查看网关 Pod 运行状态
-ssh gateman@43.139.214.231 "echo REDACTED | sudo -S kubectl get pods -n higress-system -o wide"
+ssh gateman@43.139.214.231 "sudo -n kubectl get pods -n higress-system -o wide"
 
 # 检查当前生效的 Wasm 插件版本
-ssh gateman@43.139.214.231 "echo REDACTED | sudo -S kubectl get wasmplugin finops-audit -n higress-system -o yaml | grep url"
+ssh gateman@43.139.214.231 "sudo -n kubectl get wasmplugin finops-audit -n higress-system -o yaml | grep url"
 
 # 实时查看网关 Envoy 加载 Wasm 的日志
-ssh gateman@43.139.214.231 "echo REDACTED | sudo -S kubectl logs deploy/higress-gateway -n higress-system --tail=50"
+ssh gateman@43.139.214.231 "sudo -n kubectl logs deploy/higress-gateway -n higress-system --tail=50"
 ```
 
 ### 5.3 生产连通性与财务审计入库验证
@@ -231,5 +235,5 @@ curl -N -i -X POST https://higress.jppwl.asia/v1/chat/completions \
   -d '{"model": "gemini-3.8-flash", "messages": [{"role": "user", "content": "ping"}], "stream": true}'
 
 # 检查 Dashboard 后端入库日志
-ssh gateman@43.139.214.231 "echo REDACTED | sudo -S kubectl logs deploy/higress-dashboard-backend -n higress-system --tail=10"
+ssh gateman@43.139.214.231 "sudo -n kubectl logs deploy/higress-dashboard-backend -n higress-system --tail=10"
 ```
