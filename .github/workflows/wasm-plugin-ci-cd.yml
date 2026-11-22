@@ -39,12 +39,12 @@ jobs:
       contents: write
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: '1.26'
           cache-dependency-path: plugins/finops-audit/go.sum
@@ -85,12 +85,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           # 与 backend (services/dashboard-api) 统一为 1.26, 消除工具链双版本
           go-version: '1.26'
@@ -172,13 +172,13 @@ jobs:
       id-token: write   # cosign keyless (OIDC)
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: '1.26'
           cache-dependency-path: |
@@ -204,7 +204,7 @@ jobs:
           echo "ai-gatekeeper Wasm: $(ls -lh plugin.wasm | awk '{print $5}')"
 
       - name: Upload Wasm Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: higress-wasm-plugins
           path: |
@@ -213,11 +213,11 @@ jobs:
 
       - name: Set up Docker Buildx
         if: github.ref == 'refs/heads/main'
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
         if: github.ref == 'refs/heads/main'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -226,7 +226,7 @@ jobs:
       - name: Build and Push finops-audit Wasm OCI Image
         id: finops
         if: github.ref == 'refs/heads/main'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: plugins/finops-audit
           file: plugins/finops-audit/Dockerfile
@@ -240,7 +240,7 @@ jobs:
       - name: Build and Push ai-gatekeeper Wasm OCI Image
         id: gatekeeper
         if: github.ref == 'refs/heads/main'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: plugins/ai-gatekeeper
           file: plugins/ai-gatekeeper/Dockerfile
@@ -305,7 +305,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && vars.SMOKE_BASE_URL != ''
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Wait for ArgoCD sync & probe gateway contract
         env:
