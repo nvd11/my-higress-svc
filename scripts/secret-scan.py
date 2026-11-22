@@ -52,6 +52,8 @@ PATTERNS = (
     re.compile(r"echo\s+['\"]?[A-Za-z0-9@#%^&*_.!+-]{6,}['\"]?\s*\|\s*sudo\s+-S"),
     # password / passwd / pwd 直接赋字面量 (>=8 字符; 排除 $VAR / ${...} / <占位>)
     re.compile(r"(?i)\b(?:pass(?:word|wd)|pwd)\s*[:=]\s*['\"]?[A-Za-z0-9!@#$%^&*_+-]{8,}"),
+    # getEnv("XXX_PASSWORD", "字面量") 之类的硬编码默认口令
+    re.compile(r'(?i)_(?:PASSWORD|PASSWD|PWD)"\s*,\s*"[^"]{6,}"'),
 )
 
 # 这些路径本身就是"凭证模板", 命中不算泄露
