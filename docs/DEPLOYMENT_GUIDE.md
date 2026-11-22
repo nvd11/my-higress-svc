@@ -354,7 +354,9 @@ git commit -m "feat(argocd): register higress-svc application targeting free-arm
 git push origin main
 
 # 登录阿里云 ArgoCD 控制面触发同步
-sshpass -p 'ga@REDACTED' ssh root@8.148.149.80 "argocd app sync higress-svc"
+# 前置条件: 已通过 SSH key 配置 root@8.148.149.80 免密登录。
+# 安全约定: 严禁在文档、脚本或 Git 中保存明文口令。
+ssh root@8.148.149.80 "argocd app sync higress-svc"
 ```
 
 ### 步骤 6.3：排查 Pod 调度位置与状态
