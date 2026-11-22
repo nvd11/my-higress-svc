@@ -73,7 +73,8 @@ func main() {
 		api.RegisterMetricsRoutes(v1)
 		api.RegisterPayloadRoutes(v1, vlogsClient)
 		api.RegisterInternalRoutes(v1, vlogsClient)
-		api.RegisterAntigravityQuotaRoutes(v1)
+		api.RegisterA6BillingRoutes(v1)
+		api.RegisterOpenCodeQuotaRoutes(v1)
 	}
 
 	// 8. 启动纯粹 HTTP API 服务与优雅停机

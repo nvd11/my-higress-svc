@@ -2,8 +2,8 @@ import React from "react";
 import { Activity, RefreshCw, Calendar, Sparkles } from "lucide-react";
 
 interface NavbarProps {
-  activeTab: "audit" | "antigravity";
-  onTabChange: (tab: "audit" | "antigravity") => void;
+  activeTab: "audit" | "upstream";
+  onTabChange: (tab: "audit" | "upstream") => void;
   selectedDate: string;
   onDateChange: (date: string) => void;
   autoRefresh: number;
@@ -57,9 +57,9 @@ export const Navbar: React.FC<NavbarProps> = ({
               实时调用审计
             </button>
             <button
-              onClick={() => onTabChange("antigravity")}
+              onClick={() => onTabChange("upstream")}
               className={`px-3.5 py-1.5 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
-                activeTab === "antigravity"
+                activeTab === "upstream"
                   ? "bg-indigo-600 text-white shadow-sm font-semibold"
                   : "text-slate-600 hover:text-slate-900"
               }`}

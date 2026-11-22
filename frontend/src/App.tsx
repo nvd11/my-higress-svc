@@ -3,11 +3,11 @@ import { Navbar } from "./components/Navbar";
 import { MetricCards } from "./components/MetricCards";
 import { LogsTable } from "./components/LogsTable";
 import { PayloadDrawer } from "./components/PayloadDrawer";
-import { AntigravityQuotaTab } from "./components/AntigravityQuotaTab";
+import { UpstreamQuotaTab } from "./components/UpstreamQuotaTab";
 import { LogItem, PaginatedLogsResponse, SummaryMetrics } from "./types";
 
 export const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<"audit" | "antigravity">("audit");
+  const [activeTab, setActiveTab] = useState<"audit" | "upstream">("audit");
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     // 默认选用客户端本地/香港时间自然日 (YYYY-MM-DD)，避免 UTC 跨日偏差
     const d = new Date();
@@ -143,8 +143,8 @@ export const App: React.FC = () => {
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-6 space-y-6">
-        {activeTab === "antigravity" ? (
-          <AntigravityQuotaTab />
+        {activeTab === "upstream" ? (
+          <UpstreamQuotaTab />
         ) : (
           <>
             {/* Metric Cards Banner */}

@@ -95,27 +95,15 @@ export interface PayloadData {
   response_url: string;
 }
 
-export interface AntigravityBucket {
-  bucket_id: string;
-  display_name: string;
-  window: string;
-  remaining_fraction: number;
-  reset_time: string;
-  description: string;
+export interface OpenCodeUsageWindow {
+  status: string;
+  percent: number;
+  resetsAt: string;
 }
 
-export interface AntigravityModelGroup {
-  display_name: string;
-  description: string;
-  buckets: AntigravityBucket[];
-}
-
-export interface AntigravityAccountQuota {
-  email: string;
-  status: "healthy" | "rate_limited" | "error";
+export interface OpenCodeUsageResponse {
+  usage: Record<string, OpenCodeUsageWindow>;
   last_updated: string;
-  error_msg?: string;
-  groups: AntigravityModelGroup[];
 }
 
 export interface A6APIBilling {
@@ -124,13 +112,12 @@ export interface A6APIBilling {
   soft_limit_usd: number;
   hard_limit_usd: number;
   has_payment_method: boolean;
-  status: "active" | "error";
+  status: "active" | "error" | "unconfigured";
   error_msg?: string;
   last_updated: string;
 }
 
-export interface AntigravityQuotaResponse {
-  accounts: AntigravityAccountQuota[];
+export interface A6BillingResponse {
   a6api?: A6APIBilling;
   last_updated: string;
 }
