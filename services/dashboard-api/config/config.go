@@ -50,7 +50,7 @@ func LoadConfig() *Config {
 		MySQLDatabase:   getEnv("MYSQL_DB", "litellm_db"),
 		RedisHost:       getEnv("REDIS_HOST", "100.105.130.0"),
 		RedisPort:       getEnv("REDIS_PORT", "6379"),
-		RedisPassword:   getEnv("REDIS_PASSWORD", "REDACTED"),
+		RedisPassword:   getEnv("REDIS_PASSWORD", ""),
 		VictoriaLogsURL: vlogsURL,
 		AntigravityProxyURL: getEnv("ANTIGRAVITY_PROXY_URL", "http://10.43.250.150:3000"),
 		DefaultUSDtoCNY: fxRate,
