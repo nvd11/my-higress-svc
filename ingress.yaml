@@ -1,6 +1,6 @@
 # ==============================================================================
 # Higress Ingress 业务入口多上游分发配置 (以 config.yaml 为唯一标准)
-# 由 internal/pricinggen 自动生成自 config.yaml (sha256:01987ad4de7e); 严禁手改
+# 由 internal/pricinggen 自动生成自 config.yaml (sha256:fcae0091aa17); 严禁手改
 # ==============================================================================
 # 架构约定:
 #   1. 无 catch-all 兜底路由 —— provider 头缺失/未知时由 Envoy 直接 404,
@@ -26,6 +26,36 @@ metadata:
     higress.io/upstream-vhost: api.a6api.com
     higress.io/exact-match-header-x-higress-llm-provider: a6api
     higress.io/upstream-key-env: A6_API_KEY
+spec:
+  ingressClassName: higress
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              resource:
+                apiGroup: networking.higress.io
+                kind: McpBridge
+                name: default
+---
+# ── provider: opencode-go                      → https://opencode.ai:443  (deepseek-v4.1-flash-1017-oc, hy4-flash-free-oc)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: higress-ai-ingress-opencode-go
+  namespace: higress-system
+  labels:
+    app.kubernetes.io/name: higress-ai-gateway
+    app.kubernetes.io/part-of: my-higress-svc
+    higress.io/llm-provider: opencode-go
+  annotations:
+    higress.io/backend-protocol: HTTPS
+    higress.io/destination: opencode-go.dns
+    higress.io/upstream-vhost: opencode.ai
+    higress.io/exact-match-header-x-higress-llm-provider: opencode-go
+    higress.io/upstream-key-env: OPENCODE_GO_API_KEY
+    nginx.ingress.kubernetes.io/rewrite-target: /inference/go/v1/chat/completions
 spec:
   ingressClassName: higress
   rules:
