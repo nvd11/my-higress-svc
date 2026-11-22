@@ -8,6 +8,14 @@ updates:
     groups:
       go-deps:
         patterns: ["*"]
+    # higress-group 的 wasm SDK 大版本升级会引入 nottinygc 的 cmalloc 构建问题
+    # (v1.x 需要 TinyGo/特定构建标签, 普通 go vet / wasip1 编译会失败),
+    # 因此只允许 patch, 禁止 major/minor 自动升级。
+    ignore:
+      - dependency-name: "github.com/higress-group/proxy-wasm-go-sdk"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "github.com/higress-group/wasm-go"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
   - package-ecosystem: gomod
     directory: /plugins/ai-gatekeeper
     schedule:
@@ -15,6 +23,11 @@ updates:
     groups:
       go-deps:
         patterns: ["*"]
+    ignore:
+      - dependency-name: "github.com/higress-group/proxy-wasm-go-sdk"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "github.com/higress-group/wasm-go"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
   - package-ecosystem: gomod
     directory: /services/dashboard-api
     schedule:
