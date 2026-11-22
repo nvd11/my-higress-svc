@@ -10,6 +10,8 @@
 
 历史教训: 2026-11 本仓库 (PUBLIC) 曾把 16 把 virtual key 明文提交 13 天,
 旧的单条正则只扫 wasm-plugin.yaml 且只认一种 key 格式, 完全没兜住。
+2026-11-22 补充: 文档中曾出现 sshpass / sudo -S 明文口令, 以及 OpenCode
+的 oc_sk_ 新 key 格式; 本脚本已覆盖这些模式。
 """
 from __future__ import annotations
 
@@ -38,10 +40,18 @@ ALLOWLIST = (
 PATTERNS = (
     # OpenAI 风格: sk- 开头 + 长随机串
     re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
+    # OpenCode Go / Console key: oc_sk_ 开头
+    re.compile(r"oc_sk_[A-Za-z0-9_-]{20,}"),
     # Google API key
     re.compile(r"AIza[0-9A-Za-z_-]{30,}"),
     # 私钥块
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    # sshpass 明文口令
+    re.compile(r"sshpass\s+-p\s+['\"]?[^\s'\"]{4,}"),
+    # echo <字面量> | sudo -S (明文口令喂给 sudo)
+    re.compile(r"echo\s+['\"]?[A-Za-z0-9@#%^&*_.!+-]{6,}['\"]?\s*\|\s*sudo\s+-S"),
+    # password / passwd / pwd 直接赋字面量 (>=8 字符; 排除 $VAR / ${...} / <占位>)
+    re.compile(r"(?i)\b(?:pass(?:word|wd)|pwd)\s*[:=]\s*['\"]?[A-Za-z0-9!@#$%^&*_+-]{8,}"),
 )
 
 # 这些路径本身就是"凭证模板", 命中不算泄露
@@ -77,7 +87,9 @@ def main() -> int:
                         if allowed(line, path):
                             continue
                         frag = m.group(0)
-                        masked = frag[:6] + "…" + frag[-4:]
+                        # 只显示前缀, 不回显尾部: CI 日志可能是公开的,
+                        # 避免把口令/Key 的后 4 位二次泄露。
+                        masked = frag[:8] + "…"
                         print(
                             f"::error file={path},line={lineno}::"
                             f"疑似明文密钥: {masked}"
