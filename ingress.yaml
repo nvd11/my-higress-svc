@@ -55,7 +55,6 @@ metadata:
     higress.io/upstream-vhost: opencode.ai
     higress.io/exact-match-header-x-higress-llm-provider: opencode-go
     higress.io/upstream-key-env: OPENCODE_GO_API_KEY
-    nginx.ingress.kubernetes.io/rewrite-target: /inference/go/v1/chat/completions
 spec:
   ingressClassName: higress
   rules:
