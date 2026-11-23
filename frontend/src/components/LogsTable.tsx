@@ -214,7 +214,7 @@ export const LogsTable: React.FC<LogsTableProps> = ({
               <th className="py-3 px-4">触发时间</th>
               <th className="py-3 px-4">Request ID</th>
               <th className="py-3 px-4">调用方 Key</th>
-              <th className="py-3 px-4">实际模型 (降级轨迹)</th>
+              <th className="py-3 px-4">实际模型 (请求 → 上游)</th>
               <th className="py-3 px-4 text-right">消耗 Tokens</th>
               <th className="py-3 px-4 text-right">折合人民币</th>
               <th className="py-3 px-4 text-right">耗时</th>
@@ -265,8 +265,11 @@ export const LogsTable: React.FC<LogsTableProps> = ({
                     <td className="py-3 px-4 whitespace-nowrap font-mono">
                       <span className="text-purple-700 font-medium">{log.model_used}</span>
                       {log.model_requested !== log.model_used && (
-                        <span className="ml-1.5 text-[10px] text-amber-700 bg-amber-50 px-1 py-0.2 rounded border border-amber-200">
-                          降级自 {log.model_requested}
+                        <span
+                          className="ml-1.5 text-[10px] text-slate-600 bg-slate-50 px-1 py-0.2 rounded border border-slate-200"
+                          title={`客户端请求模型: ${log.model_requested}`}
+                        >
+                          请求: {log.model_requested}
                         </span>
                       )}
                     </td>
