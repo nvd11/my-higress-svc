@@ -39,11 +39,11 @@ gateway:
     - key: "node.kubernetes.io/not-ready"
       operator: "Exists"
       effect: "NoExecute"
-      tolerationSeconds: 300
+      tolerationSeconds: 3600
     - key: "node.kubernetes.io/unreachable"
       operator: "Exists"
       effect: "NoExecute"
-      tolerationSeconds: 300
+      tolerationSeconds: 3600
   resources:
     requests:
       cpu: "200m"
