@@ -36,7 +36,7 @@ spec:
   priority: 900
   failStrategy: FAIL_CLOSE
   imagePullPolicy: Always
-  url: oci://ghcr.io/nvd11/higress-ai-gatekeeper:0b075c9a03fddd2764ea60d60667bd01587a1ed4
+  url: oci://ghcr.io/nvd11/higress-ai-gatekeeper:14fd3f57491cb8550f6c2cd624085ede7564b6f8
   defaultConfig:
     dashboard_api_url: "http://higress-dashboard-backend.higress-system.svc.cluster.local:4000/api/v1/internal/audit-log"
     # ⚠️ 由 higress-provider-key-sync Job 从 Secret 回填 (明文钥匙永不落 Git)
@@ -56,7 +56,7 @@ spec:
   priority: 90
   failStrategy: FAIL_OPEN
   imagePullPolicy: Always
-  url: oci://ghcr.io/nvd11/higress-finops-audit:0b075c9a03fddd2764ea60d60667bd01587a1ed4
+  url: oci://ghcr.io/nvd11/higress-finops-audit:14fd3f57491cb8550f6c2cd624085ede7564b6f8
   defaultConfig:
     dashboard_api_url: "http://higress-dashboard-backend.higress-system.svc.cluster.local:4000/api/v1/internal/audit-log"
     default_fx_rate: 7.2300
