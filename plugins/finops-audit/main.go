@@ -136,6 +136,13 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 		ctx.SetContext(ctxPromptBody, string(body))
 		// 解析请求中的 model
 		model := gjson.GetBytes(body, "model").String()
+		// ⚠️ ai-gatekeeper (priority 900) 会先把 body.model 改写为上游真名，
+		// 本插件 (priority 90) 读到的已是改写后的值。因此优先使用 gatekeeper
+		// 注入的 x-original-model（客户端原始模型名），否则 deepseek-v4.1-flash-1017-oc
+		// 这类别名会被记成 deepseek-v4.1-flash，查价命中错误的 a6api 渠道（0 价）。
+		if orig, err := proxywasm.GetHttpRequestHeader("x-original-model"); err == nil && orig != "" {
+			model = orig
+		}
 		if model != "" {
 			ctx.SetContext(ctxModelRequested, model)
 		}
@@ -185,11 +192,12 @@ func fallbackModelName(fullResponse string) string {
 
 // resolveRequestedModel cascades through ctx, request headers, response body, or defaults to "unknown"
 func resolveRequestedModel(ctx wrapper.HttpContext, fullResponse string) string {
-	if m, _ := ctx.GetContext(ctxModelRequested).(string); m != "" {
-		return m
-	}
+	// 优先使用 gatekeeper 注入的客户端原始模型名；ctx 里的 body model 可能已被改写为上游真名。
 	if origModel, err := proxywasm.GetHttpRequestHeader("x-original-model"); err == nil && origModel != "" {
 		return origModel
+	}
+	if m, _ := ctx.GetContext(ctxModelRequested).(string); m != "" {
+		return m
 	}
 	if llmModel, err := proxywasm.GetHttpRequestHeader("x-higress-llm-model"); err == nil && llmModel != "" {
 		return llmModel
